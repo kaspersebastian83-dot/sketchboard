@@ -409,6 +409,48 @@ try {
   await expect.poll(async () => (await scene(page)).filter((el) => el.chartId).length).toBe(0);
   await page.mouse.click(60, 500); // deselect
 
+  // Images: pasting an image file drops it on the board; it renders at the right spot,
+  // swaps the style panel for image info, and deletes like any other element.
+  await page.evaluate(() => {
+    const c = document.createElement('canvas');
+    c.width = 60; c.height = 40;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#e8590c';
+    ctx.fillRect(0, 0, 60, 40);
+    c.toBlob(async (blob) => {
+      const dt = new DataTransfer();
+      dt.items.add(new File([await blob.arrayBuffer()], 'block.png', { type: 'image/png' }));
+      window.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true }));
+    }, 'image/png');
+  });
+  await expect.poll(async () => (await scene(page)).filter((el) => el.type === 'image').length).toBe(1);
+  const imageEl = (await scene(page)).find((el) => el.type === 'image');
+  expect(imageEl.name).toBe('block.png');
+  expect(imageEl.width / imageEl.height).toBeCloseTo(1.5, 1);
+  // Pixels at the image center turn orange once the bitmap decodes (world→screen via stored camera).
+  const boardCamera = await page.evaluate(() => {
+    const ws = JSON.parse(localStorage.getItem('sketchboard-workspace-v1'));
+    return ws.boards.find((b) => b.id === ws.activeBoardId).camera;
+  });
+  const imageScreen = {
+    x: (imageEl.x + imageEl.width / 2) * boardCamera.zoom + boardCamera.x,
+    y: (imageEl.y + imageEl.height / 2) * boardCamera.zoom + boardCamera.y,
+  };
+  await expect.poll(() => page.evaluate(({ x, y }) => {
+    const canvas = document.querySelector('.drawing-canvas');
+    const px = canvas.getContext('2d').getImageData(Math.round(x), Math.round(y), 1, 1).data;
+    return px[0] > 180 && px[3] > 200; // red channel of #e8590c, fully opaque
+  }, imageScreen)).toBe(true);
+  // Selecting it shows image info instead of stroke controls.
+  await page.mouse.click(imageScreen.x, imageScreen.y);
+  await expect.poll(() => page.evaluate(() => window.__selectedIds ?? [])).toEqual([imageEl.id]);
+  await expect(page.locator('.image-info')).toBeVisible();
+  await expect(page.getByLabel('Stroke color')).toHaveCount(0);
+  // Delete it so the board is clean for the tests below.
+  await page.keyboard.press('Delete');
+  await expect.poll(async () => (await scene(page)).filter((el) => el.type === 'image').length).toBe(0);
+  await page.mouse.click(60, 500); // deselect
+
   // File drop: a .csv or .xlsx dropped on the board becomes a chart at the drop point.
   const dropFile = ({ name, type, payload, isB64, x, y }) => page.evaluate(async ({ name, type, payload, isB64, x, y }) => {
     const dt = new DataTransfer();
@@ -516,7 +558,7 @@ try {
   // Unsupported files are rejected with a toast, no chart inserted.
   const countBeforePdf = (await chartEls()).length;
   await dropFile({ name: 'notes.pdf', type: 'application/pdf', payload: '%PDF-1.4', isB64: false, x: 300, y: 300 });
-  await expect(page.getByText('Drop a .csv, .tsv, or .xlsx file to draw a chart')).toBeVisible();
+  await expect(page.getByText('Drop an image, or a .csv / .tsv / .xlsx file to draw a chart')).toBeVisible();
   await expect.poll(async () => (await chartEls()).length).toBe(countBeforePdf);
   // Clean up both dropped charts so the guide tests below see the seeded board only.
   await deleteFirstChart();
@@ -985,7 +1027,7 @@ try {
   expect(await mobile.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
   expect(errors).toEqual([]);
-  console.log('PASS: draw, move, duplicate, undo/redo, text, stickies, smart arrows, snap guides, infinite zoom, minimap, mouse navigation, gesture coach, paste-to-chart, file drop, freehand, zoom, PNG/SVG/sketch export, theme, persistence, share, boards, migration, frames, sticky tags and votes, presentation mode, fading ink, movable panels, zen mode, live collaboration, help, and mobile layout.');
+  console.log('PASS: draw, move, duplicate, undo/redo, text, stickies, smart arrows, snap guides, infinite zoom, minimap, mouse navigation, gesture coach, paste-to-chart, images, file drop, freehand, zoom, PNG/SVG/sketch export, theme, persistence, share, boards, migration, frames, sticky tags and votes, presentation mode, fading ink, movable panels, zen mode, live collaboration, help, and mobile layout.');
 } finally {
   if (browser) await browser.close();
   server.kill('SIGTERM');

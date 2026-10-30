@@ -56,6 +56,62 @@ export function getBounds(el) {
   };
 }
 
+// --- Image elements ---------------------------------------------------------
+// Images are stored as data URLs on the element itself (so boards persist and
+// the standalone build stays offline), decoded through a shared cache. Decoding
+// is async, so the cache notifies listeners when a bitmap becomes paintable
+// and the app re-renders; until then elements draw a dashed placeholder.
+
+const imageCache = new Map();
+const imageListeners = new Set();
+
+export function onImageReady(listener) {
+  imageListeners.add(listener);
+  return () => imageListeners.delete(listener);
+}
+
+export function getImage(src) {
+  let entry = imageCache.get(src);
+  if (!entry) {
+    const img = new Image();
+    entry = { img, ready: false };
+    img.onload = () => {
+      entry.ready = true;
+      imageListeners.forEach((listener) => listener(src));
+    };
+    img.src = src;
+    if (imageCache.size > 400) imageCache.clear();
+    imageCache.set(src, entry);
+  }
+  return entry;
+}
+
+export async function awaitImages(elements) {
+  const pending = elements.filter((el) => el.type === 'image' && el.src).map((el) => getImage(el.src).img);
+  await Promise.all(pending.map((img) => (img.complete ? Promise.resolve() : img.decode().catch(() => {}))));
+}
+
+function drawImageElement(ctx, el) {
+  const b = getBounds(el);
+  const { img, ready } = getImage(el.src);
+  if (ready && img.naturalWidth > 0) {
+    ctx.drawImage(img, b.x, b.y, b.w, b.h);
+    return;
+  }
+  ctx.save();
+  ctx.setLineDash([6, 4]);
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = 'rgba(140,140,160,0.7)';
+  ctx.strokeRect(b.x, b.y, b.w, b.h);
+  ctx.setLineDash([]);
+  ctx.fillStyle = 'rgba(140,140,160,0.85)';
+  ctx.font = `13px ${FONT_FAMILY}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(el.name || 'image', b.x + b.w / 2, b.y + b.h / 2);
+  ctx.restore();
+}
+
 // Elements are updated immutably, so a per-id cache invalidated by object
 // identity is always correct and lets crowded scenes skip recomputation.
 export const renderStats = { generated: 0, reused: 0, culled: 0, boundsComputed: 0, boundsReused: 0 };
@@ -207,7 +263,8 @@ export function resizeElement(el, handle, point, keepAspect = false) {
   if (handle.includes('s')) bottom = point.y;
   let w = Math.max(2, right - left);
   let h = Math.max(2, bottom - top);
-  if (keepAspect && original.w && original.h) {
+  // Images always keep their aspect ratio — squashing a photo is never wanted.
+  if ((keepAspect || el.type === 'image') && original.w && original.h) {
     const ratio = original.w / original.h;
     if (w / h > ratio) w = h * ratio;
     else h = w / ratio;
@@ -509,7 +566,8 @@ export function drawScene(canvas, elements, options) {
     }
     ctx.save();
     ctx.globalAlpha = sourceEl.opacity / 100;
-    if (sourceEl.type === 'text') drawText(ctx, themedElement(sourceEl, background));
+    if (sourceEl.type === 'image') drawImageElement(ctx, sourceEl);
+    else if (sourceEl.type === 'text') drawText(ctx, themedElement(sourceEl, background));
     else for (const drawable of shapesFor(rc, sourceEl, background)) rc.draw(drawable);
     ctx.restore();
   }
@@ -536,7 +594,10 @@ export function sceneBounds(elements) {
   return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
 }
 
-export function exportPng(elements, background = '#ffffff') {
+export async function exportPng(elements, background = '#ffffff') {
+  // Raster exports must wait for every bitmap to decode, or freshly pasted
+  // images would come out as placeholders.
+  await awaitImages(elements);
   const b = sceneBounds(elements);
   const padding = 40;
   const scale = Math.min(2, 6000 / Math.max(1, b.w + padding * 2), 6000 / Math.max(1, b.h + padding * 2));
@@ -629,6 +690,16 @@ export function exportSvg(elements, background = '#ffffff') {
         text.appendChild(span);
       });
       item.appendChild(text);
+    } else if (el.type === 'image') {
+      const b = getBounds(el);
+      const node = document.createElementNS(ns, 'image');
+      node.setAttribute('href', el.src);
+      node.setAttribute('x', b.x);
+      node.setAttribute('y', b.y);
+      node.setAttribute('width', b.w);
+      node.setAttribute('height', b.h);
+      node.setAttribute('preserveAspectRatio', 'none');
+      item.appendChild(node);
     } else {
       makeShapes(rc, el).forEach((shape) => item.appendChild(shape));
     }

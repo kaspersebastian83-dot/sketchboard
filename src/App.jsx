@@ -8,7 +8,7 @@ import {
   Group, Ungroup, AlignStartVertical, AlignCenterVertical, AlignEndVertical,
   AlignStartHorizontal, AlignCenterHorizontal, AlignEndHorizontal, Link2, LayoutGrid,
   Mouse, Magnet, FileUp, Frame, Play, ChevronLeft, ChevronRight, Radio, Crown, LogOut, Users,
-  GripVertical, Eye, Github,
+  GripVertical, Eye, Github, ImagePlus,
 } from 'lucide-react';
 import {
   collabAvailable, generateName, generateRoomCode, liveRoomFromUrl, liveJoinUrl, connectCollab,
@@ -16,7 +16,7 @@ import {
 import {
   uid, getBounds, elementBounds, hitTest, hitHandle, resizeElement, resizeSelection, selectionBounds, drawScene, sceneBounds,
   exportPng, exportSvg, SELECTION_COLOR, renderStats, bindPoint, rebindArrow, syncBoundArrows, pruneBindings, snapToGuides,
-  STICKY_STATUSES, stickyBadgeCenter,
+  STICKY_STATUSES, stickyBadgeCenter, onImageReady,
 } from './engine.js';
 import { encodeShareHash, buildSnapshotHtml } from './share.js';
 import { loadWorkspace, saveWorkspace, importSceneToWorkspace } from './store.js';
@@ -169,6 +169,10 @@ export default function App() {
   const cursorSentAt = useRef(0);
   const cameraRef = useRef(camera);
   const [hints, setHints] = useState(loadHints);
+  // Bumped whenever an image bitmap finishes decoding, so the canvas and the
+  // minimap repaint placeholders into real pixels.
+  const [imagesEpoch, setImagesEpoch] = useState(0);
+  useEffect(() => onImageReady(() => setImagesEpoch((n) => n + 1)), []);
   // Zen is a per-board preference: boards remember whether they like a clean
   // desk, and starting a presentation borrows zen mode until the show is over.
   const [zenMode, setZenMode] = useState(() => Boolean(activeBoard?.zen));
@@ -193,6 +197,7 @@ export default function App() {
   const appRef = useRef(null);
   const interaction = useRef(null);
   const fileInputRef = useRef(null);
+  const imageInputRef = useRef(null);
   const toastTimer = useRef(null);
   const flyRaf = useRef(null);
 
@@ -426,7 +431,7 @@ export default function App() {
     render();
     // Canvas text must be redrawn once the embedded handwritten font is ready.
     document.fonts.ready.then(render);
-  }, [elements, camera, size, selectedIds, theme]);
+  }, [elements, camera, size, selectedIds, theme, imagesEpoch]);
 
   // --- Minimap -------------------------------------------------------------
   const MINIMAP_W = 208;
@@ -484,7 +489,7 @@ export default function App() {
       ctx.rect(Math.max(0, vx), Math.max(0, vy), Math.min(vwpx, MINIMAP_W), Math.min(vhpx, MINIMAP_H));
       ctx.stroke();
     }
-  }, [elements, camera, size, theme, minimapOpen, sharedView, minimapTransform]);
+  }, [elements, camera, size, theme, minimapOpen, sharedView, minimapTransform, imagesEpoch]);
 
   const minimapJump = useCallback((event) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -1678,9 +1683,46 @@ export default function App() {
     return null;
   }, []);
 
+  // Images: re-encoded (max 1600px, JPEG for photos / PNG when the source can
+  // carry transparency) so boards stay light, persist in localStorage, and the
+  // standalone file remains fully offline.
+  const insertImage = useCallback(async (file, at) => {
+    try {
+      const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+      const scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
+      const w = Math.max(1, Math.round(bitmap.width * scale));
+      const h = Math.max(1, Math.round(bitmap.height * scale));
+      const scratch = document.createElement('canvas');
+      scratch.width = w;
+      scratch.height = h;
+      scratch.getContext('2d').drawImage(bitmap, 0, 0, w, h);
+      bitmap.close();
+      const keepPng = /image\/(png|gif|webp)/.test(file.type);
+      const src = keepPng ? scratch.toDataURL('image/png') : scratch.toDataURL('image/jpeg', 0.85);
+      const cam = cameraRef.current;
+      const center = at || { x: (window.innerWidth / 2 - cam.x) / cam.zoom, y: (window.innerHeight / 2 - cam.y) / cam.zoom };
+      const width = Math.min(420, w);
+      const height = Math.max(1, Math.round(width * h / w));
+      const el = {
+        id: uid(), type: 'image', x: center.x - width / 2, y: center.y - height / 2,
+        width, height, src, name: file.name || 'Pasted image', opacity: 100,
+      };
+      commit((items) => [...items, el]);
+      notify(`Added ${el.name}`);
+    } catch {
+      notify(`Could not read ${file.name || 'that image'}`);
+    }
+  }, [commit, notify]);
+
   useEffect(() => {
     const onPaste = (event) => {
       if (sharedView || textEditor || modal || chartEditor || sheetPicker) return;
+      const imageFile = Array.from(event.clipboardData?.files || []).find((f) => f.type.startsWith('image/'));
+      if (imageFile) {
+        event.preventDefault();
+        insertImage(imageFile);
+        return;
+      }
       const text = event.clipboardData?.getData('text/plain');
       if (!text) return;
       const table = parseTableText(text);
@@ -1690,7 +1732,7 @@ export default function App() {
     };
     window.addEventListener('paste', onPaste);
     return () => window.removeEventListener('paste', onPaste);
-  }, [sharedView, textEditor, modal, chartEditor, sheetPicker, insertChart]);
+  }, [sharedView, textEditor, modal, chartEditor, sheetPicker, insertChart, insertImage]);
 
   // Drag-and-drop import: dropping a .csv/.tsv or .xlsx file on the board
   // charts its first sheet, centered on the drop point.
@@ -1721,6 +1763,10 @@ export default function App() {
         x: (event.clientX - camera.x) / camera.zoom,
         y: (event.clientY - camera.y) / camera.zoom,
       };
+      if (file.type.startsWith('image/')) {
+        insertImage(file, at);
+        return;
+      }
       const isSpreadsheet = name.endsWith('.xlsx') || name.endsWith('.xls') || name.endsWith('.csv') || name.endsWith('.tsv') || name.endsWith('.txt') || file.type.startsWith('text/');
       // Update-from-file: dropping data onto an existing chart refreshes that
       // chart in place instead of creating a new one.
@@ -1742,7 +1788,7 @@ export default function App() {
         } else if (name.endsWith('.csv') || name.endsWith('.tsv') || name.endsWith('.txt') || file.type.startsWith('text/')) {
           finish(parseTableText(await file.text()));
         } else {
-          notify('Drop a .csv, .tsv, or .xlsx file to draw a chart');
+          notify('Drop an image, or a .csv / .tsv / .xlsx file to draw a chart');
         }
       } catch {
         notify(`Could not read ${file.name}`);
@@ -1758,7 +1804,7 @@ export default function App() {
       window.removeEventListener('dragleave', onDragLeave);
       window.removeEventListener('drop', onDrop);
     };
-  }, [sharedView, textEditor, modal, chartEditor, sheetPicker, camera, insertChart, chartAtPoint, updateChartFromTable, notify]);
+  }, [sharedView, textEditor, modal, chartEditor, sheetPicker, camera, insertChart, chartAtPoint, updateChartFromTable, insertImage, notify]);
 
   const applyChart = () => {
     if (!chartEditor) return;
@@ -1836,6 +1882,7 @@ export default function App() {
     transitionToFrame(getBounds(framesSorted[nextIndex]));
   };
   const showProperties = selectedIds.length > 0 || !['selection', 'hand', 'eraser'].includes(tool);
+  const singleImage = selectedIds.length === 1 && selectedElements[0]?.type === 'image';
   const canvasBackground = theme === 'dark' ? '#141414' : '#ffffff';
   const editorPosition = textEditor ? { left: textEditor.x * camera.zoom + camera.x, top: textEditor.y * camera.zoom + camera.y } : null;
 
@@ -1932,8 +1979,8 @@ export default function App() {
       {fileDrag && (
         <div className="file-drop-overlay" aria-hidden="true">
           <FileUp size={38} strokeWidth={1.6} />
-          <strong>Drop to draw a chart</strong>
-          <span>.csv &nbsp;.tsv &nbsp;.xlsx</span>
+          <strong>Drop to add to the board</strong>
+          <span>images · .csv &nbsp;.tsv &nbsp;.xlsx</span>
         </div>
       )}
 
@@ -1972,6 +2019,7 @@ export default function App() {
             <button onClick={() => { setTheme(theme === 'dark' ? 'light' : 'dark'); }}>{theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}<span>{theme === 'dark' ? 'Light' : 'Dark'} mode</span><kbd>⇧⌘D</kbd></button>
             <button onClick={() => { setModal('help'); setMenuOpen(false); }}><Keyboard size={17} /><span>Keyboard shortcuts</span><kbd>?</kbd></button>
             <button onClick={() => { resetIslandPositions(); setMenuOpen(false); }}><AlignStartVertical size={17} /><span>Reset panel positions</span></button>
+            <button onClick={() => { imageInputRef.current?.click(); setMenuOpen(false); }}><ImagePlus size={17} /><span>Insert image…</span></button>
             <button onClick={() => { setZenPreference(true); setMenuOpen(false); }}><Eye size={17} /><span>Zen mode</span><kbd>Z</kbd></button>
             <div className="menu-separator" />
             <button className="danger" onClick={() => { setModal('reset'); setMenuOpen(false); }}><Trash2 size={17} /><span>Reset the canvas</span></button>
@@ -2148,7 +2196,7 @@ export default function App() {
               </div>
             </>
           )}
-          <div className="property-row"><span>Stroke</span><ColorSwatches colors={STROKE_COLORS} value={currentStyle.stroke} onChange={(value) => applyStyle('stroke', value)} label="Stroke color" /></div>
+          {!singleImage && <div className="property-row"><span>Stroke</span><ColorSwatches colors={STROKE_COLORS} value={currentStyle.stroke} onChange={(value) => applyStyle('stroke', value)} label="Stroke color" /></div>}
           {textContext && (
             <>
               <div className="property-row"><span>Font size</span><div className="segmented text-size-controls">{[16, 20, 24, 32, 48].map((size) => <button key={size} className={currentStyle.fontSize === size ? 'selected' : ''} onClick={() => applyStyle('fontSize', size)} aria-label={`Text size ${size} pixels`} title={`${size}px`}><span>{size}</span></button>)}</div></div>
@@ -2164,14 +2212,17 @@ export default function App() {
               </div></div>
             </>
           )}
-          {!['line', 'arrow', 'freedraw', 'text'].includes(tool) && !['line', 'arrow', 'freedraw', 'text'].includes(selectedElements[0]?.type) && (
+          {!['line', 'arrow', 'freedraw', 'text', 'image'].includes(tool) && !['line', 'arrow', 'freedraw', 'text', 'image'].includes(selectedElements[0]?.type) && (
             <div className="property-row"><span>Background</span><ColorSwatches colors={BACKGROUND_COLORS} value={currentStyle.background} onChange={(value) => applyStyle('background', value)} label="Background color" allowTransparent /></div>
           )}
-          {!['line', 'arrow', 'freedraw', 'text'].includes(tool) && !['line', 'arrow', 'freedraw', 'text'].includes(selectedElements[0]?.type) && (
+          {!['line', 'arrow', 'freedraw', 'text', 'image'].includes(tool) && !['line', 'arrow', 'freedraw', 'text', 'image'].includes(selectedElements[0]?.type) && (
             <div className="property-row"><span>Fill</span><div className="segmented three"><button className={currentStyle.fillStyle === 'hachure' ? 'selected' : ''} onClick={() => applyStyle('fillStyle', 'hachure')} title="Hachure"><span className="fill-icon hachure" /></button><button className={currentStyle.fillStyle === 'cross-hatch' ? 'selected' : ''} onClick={() => applyStyle('fillStyle', 'cross-hatch')} title="Cross-hatch"><span className="fill-icon cross" /></button><button className={currentStyle.fillStyle === 'solid' ? 'selected' : ''} onClick={() => applyStyle('fillStyle', 'solid')} title="Solid"><span className="fill-icon solid" /></button></div></div>
           )}
-          <div className="property-row"><span>Stroke width</span><div className="segmented three">{[1, 2, 4].map((width) => <button key={width} className={currentStyle.strokeWidth === width ? 'selected' : ''} onClick={() => applyStyle('strokeWidth', width)} aria-label={`Stroke width ${width}`}><span className={`stroke-sample width-${width}`} /></button>)}</div></div>
-          <div className="property-row"><span>Roughness</span><div className="segmented three">{[0, 1, 2].map((roughness) => <button key={roughness} className={currentStyle.roughness === roughness ? 'selected' : ''} onClick={() => applyStyle('roughness', roughness)} aria-label={`Roughness ${roughness}`}><svg viewBox="0 0 28 20"><path className={`rough-${roughness}`} d={roughness === 0 ? 'M3 16 L25 4' : roughness === 1 ? 'M3 15 Q13 1 25 5' : 'M3 14 Q8 3 14 8 T25 3'} /></svg></button>)}</div></div>
+          {!singleImage && <div className="property-row"><span>Stroke width</span><div className="segmented three">{[1, 2, 4].map((width) => <button key={width} className={currentStyle.strokeWidth === width ? 'selected' : ''} onClick={() => applyStyle('strokeWidth', width)} aria-label={`Stroke width ${width}`}><span className={`stroke-sample width-${width}`} /></button>)}</div></div>}
+          {!singleImage && <div className="property-row"><span>Roughness</span><div className="segmented three">{[0, 1, 2].map((roughness) => <button key={roughness} className={currentStyle.roughness === roughness ? 'selected' : ''} onClick={() => applyStyle('roughness', roughness)} aria-label={`Roughness ${roughness}`}><svg viewBox="0 0 28 20"><path className={`rough-${roughness}`} d={roughness === 0 ? 'M3 16 L25 4' : roughness === 1 ? 'M3 15 Q13 1 25 5' : 'M3 14 Q8 3 14 8 T25 3'} /></svg></button>)}</div></div>}
+          {singleImage && (
+            <div className="property-row"><span>Image</span><div className="image-info" title={selectedElements[0].name}>{selectedElements[0].name} · {Math.round(selectedElements[0].width)} × {Math.round(selectedElements[0].height)}</div></div>
+          )}
           <div className="property-row opacity-row"><span>Opacity</span><input aria-label="Opacity" type="range" min="10" max="100" step="10" value={currentStyle.opacity} onChange={(e) => applyStyle('opacity', Number(e.target.value))} /><output>{currentStyle.opacity}%</output></div>
           {selectedIds.length > 1 && (
             <div className="property-row"><span>Align objects</span><div className="segmented object-align-controls">{[
@@ -2326,6 +2377,7 @@ export default function App() {
         </div>
       )}
       <input ref={fileInputRef} type="file" accept=".sketch,.json,application/json" hidden onChange={importJson} />
+      <input ref={imageInputRef} type="file" accept="image/*" hidden onChange={(event) => { const file = event.target.files?.[0]; if (file) insertImage(file); event.target.value = ''; }} />
       {toast && <div className="toast" role="status"><Check size={16} />{toast}</div>}
 
       {modal && (
@@ -2366,7 +2418,7 @@ export default function App() {
               <div className="shortcuts">
                 {[['Select', 'V'], ['Pan canvas', 'H, Space or right-drag'], ['Rectangle / Diamond', 'R / D'], ['Ellipse / Arrow', 'O / A'], ['Draw / Text', 'P / T'], ['Frame', 'F'], ['Find frame / jump to', '⌘ F'], ['Erase', 'E'], ['Bold / Italic', '⌘ B / ⌘ I'], ['Align left / center / right', '⇧ ⌘ L / C / R'], ['Group / Ungroup', '⌘ G / ⇧ ⌘ G'], ['Undo / Redo', '⌘ Z / ⇧ ⌘ Z'], ['Duplicate', '⌘ D'], ['Select all', '⌘ A'], ['Delete selection', 'Delete'], ['Zoom at cursor', 'Scroll'], ['Zoom in / out', '+ / −'], ['Zoom to fit', '⇧ 1'], ['Pan sideways', '⇧ Scroll'], ['Nudge selection', 'Arrow keys'], ['Sticky note', 'Double-click canvas'], ['Finish text', '⌘ Enter'], ['Zen mode', 'Z']].map(([label, key]) => <div key={label}><span>{label}</span><kbd>{key}</kbd></div>)}
               </div>
-              <p className="help-tip"><strong>Little tips:</strong> scroll to zoom toward your cursor, drag with the middle or right mouse button (or hold <kbd>Space</kbd>) to pan, and double-click the overview map to fit everything. Press <kbd>F</kbd> and drag to draw a frame — a named region that carries whatever you put inside it when dragged; double-click its name to rename, and press <kbd>⌘ F</kbd> to jump between frames. Sticky notes can wear a status dot, carry tags, and collect voting dots for retrospectives — click a note's badge to vote, right-click to take one back. Draw frames around your topics and press Present for a clean full-screen walkthrough — frames glide from one to the next with a slide as you click or press the arrow keys, move the mouse to point with a laser, press <kbd>I</kbd> to scribble fading ink over the frame, <kbd>Esc</kbd> to leave. The floating bars each have a small grip you can drag to rearrange them — the Main menu can reset their positions. Press <kbd>Z</kbd> for zen mode, a clean desk with nothing but the canvas — each board remembers its own preference, and starting a presentation borrows zen for a clean first frame, handing your desk back when the show ends. <kbd>Z</kbd> or <kbd>Esc</kbd> brings everything back. In a live session, guests follow your view and can point back at the board with their own cursors while you present. Paste cells copied from Excel or Sheets — or drop a .csv / .xlsx file on the board — to draw a chart, then double-click the chart to edit its numbers. Drop a file onto an existing chart to refresh its data in place. For live working sessions, Share → Live session starts a room on your network — guests join the link and everyone's cursors, edits, and the presenter's camera stay in sync. Hold <kbd>Shift</kbd> while resizing to preserve proportions, or while selecting to choose multiple elements. Drag a box around elements to select them — a grouped element pulls its whole group along. Click a selected group again to edit one member on its own.</p>
+              <p className="help-tip"><strong>Little tips:</strong> scroll to zoom toward your cursor, drag with the middle or right mouse button (or hold <kbd>Space</kbd>) to pan, and double-click the overview map to fit everything. Press <kbd>F</kbd> and drag to draw a frame — a named region that carries whatever you put inside it when dragged; double-click its name to rename, and press <kbd>⌘ F</kbd> to jump between frames. Sticky notes can wear a status dot, carry tags, and collect voting dots for retrospectives — click a note's badge to vote, right-click to take one back. Draw frames around your topics and press Present for a clean full-screen walkthrough — frames glide from one to the next with a slide as you click or press the arrow keys, move the mouse to point with a laser, press <kbd>I</kbd> to scribble fading ink over the frame, <kbd>Esc</kbd> to leave. The floating bars each have a small grip you can drag to rearrange them — the Main menu can reset their positions. Press <kbd>Z</kbd> for zen mode, a clean desk with nothing but the canvas — each board remembers its own preference, and starting a presentation borrows zen for a clean first frame, handing your desk back when the show ends. <kbd>Z</kbd> or <kbd>Esc</kbd> brings everything back. In a live session, guests follow your view and can point back at the board with their own cursors while you present. Paste cells copied from Excel or Sheets — or drop a .csv / .xlsx file on the board — to draw a chart, then double-click the chart to edit its numbers. Drop a file onto an existing chart to refresh its data in place. For live working sessions, Share → Live session starts a room on your network — guests join the link and everyone's cursors, edits, and the presenter's camera stay in sync. Hold <kbd>Shift</kbd> while resizing to preserve proportions, or while selecting to choose multiple elements. Drag a box around elements to select them — a grouped element pulls its whole group along. Click a selected group again to edit one member on its own. Paste or drop images — screenshots, photos, logos — straight onto the board; they move, resize (proportions stay locked), and export with everything else.</p>
               <a className="github-link" href="https://github.com/kaspersebastian83-dot/sketchboard" target="_blank" rel="noreferrer"><Github size={15} />Star Sketchboard on GitHub</a>
             </>}
             {modal === 'rename' && <>
