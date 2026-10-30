@@ -647,6 +647,45 @@ try {
   await page.keyboard.press('Delete');
   await expect.poll(async () => (await scene(page)).length).toBe(elsBefore);
 
+  // Connectors: the arrow tool glues to shape anchors and the arrow follows
+  // the shapes as they move. Screen = world + (3200, 2400) here.
+  const elsBeforeConnect = (await scene(page)).length;
+  await page.getByTestId('tool-rectangle').click();
+  await drag(page, 300, 300, 460, 420); // world (-2900,-2100) → (-2740,-1980)
+  await page.getByTestId('tool-rectangle').click();
+  await drag(page, 800, 300, 960, 420); // world (-2400,-2100) → (-2240,-1980)
+  const connA = (await scene(page)).at(-2);
+  const connB = (await scene(page)).at(-1);
+  // Drag from A's east anchor to B's west anchor (both at screen y 360).
+  await page.getByTestId('tool-arrow').click();
+  await drag(page, 460, 360, 800, 360);
+  const connector = (await scene(page)).find((el) => el.type === 'arrow' && el.startBinding?.anchor);
+  expect(connector).toBeTruthy();
+  expect(connector.startBinding.id).toBe(connA.id);
+  expect(connector.startBinding.anchor).toBe('e');
+  expect(connector.endBinding.id).toBe(connB.id);
+  expect(connector.endBinding.anchor).toBe('w');
+  expect(Math.abs(connector.x - (connA.x + connA.width))).toBeLessThan(1);
+  expect(Math.abs(connector.y - (connA.y + connA.height / 2))).toBeLessThan(1);
+  expect(Math.abs(connector.x + connector.width - connB.x)).toBeLessThan(1);
+  expect(Math.abs(connector.y + connector.height - (connB.y + connB.height / 2))).toBeLessThan(1);
+  // Moving B carries the connector's end; the start stays pinned to A.
+  await page.keyboard.press('Escape');
+  await page.getByTestId('tool-selection').click();
+  await page.mouse.click(880, 360);
+  await drag(page, 880, 360, 980, 360); // B slides 100 to the right
+  const movedB = (await scene(page)).find((el) => el.id === connB.id);
+  const carried = (await scene(page)).find((el) => el.type === 'arrow' && el.startBinding?.anchor);
+  expect(carried).toBeTruthy();
+  expect(Math.abs(carried.x + carried.width - movedB.x)).toBeLessThan(1);
+  expect(Math.abs(carried.y + carried.height - (movedB.y + movedB.height / 2))).toBeLessThan(1);
+  expect(Math.abs(carried.x - (connA.x + connA.width))).toBeLessThan(1);
+  // Cleaning up the shapes takes the arrow along in selection; delete all three.
+  await page.keyboard.press('Escape');
+  await drag(page, 200, 200, 1120, 800);
+  await page.keyboard.press('Delete');
+  await expect.poll(async () => (await scene(page)).length).toBe(elsBeforeConnect);
+
   // Frames: named regions that carry their contents, with a jump-to list.
   // Teleport far from the seeded board; screen = world − (1600, 1000).
   await page.evaluate(() => {

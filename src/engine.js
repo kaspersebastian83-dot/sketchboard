@@ -617,6 +617,25 @@ export function drawScene(canvas, elements, options) {
     drawStickyExtras(ctx, sourceEl, background, selectedIds);
   }
   drawSelection(ctx, elements, selectedIds, camera, pixelRatio);
+  // Connector hints: while the arrow tool hovers (or drags from) a bindable
+  // shape, show its four anchor points.
+  if (options.connectHint) {
+    const target = elements.find((el) => el.id === options.connectHint);
+    if (target && BINDABLE_TYPES.includes(target.type)) {
+      const radius = 5 / camera.zoom;
+      ctx.save();
+      for (const p of Object.values(anchorPoints(target))) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+        ctx.fillStyle = background;
+        ctx.fill();
+        ctx.strokeStyle = '#6965db';
+        ctx.lineWidth = 1.5 / camera.zoom;
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }
 }
 
 export function sceneBounds(elements) {
@@ -751,6 +770,27 @@ export function exportSvg(elements, background = '#ffffff') {
 export const BINDABLE_TYPES = ['rectangle', 'diamond', 'ellipse'];
 const BIND_PADDING = 10;
 
+// The four connector anchors on a shape: midpoints of each edge.
+export function anchorPoints(el) {
+  const b = getBounds(el);
+  return {
+    n: { x: b.x + b.w / 2, y: b.y },
+    e: { x: b.x + b.w, y: b.y + b.h / 2 },
+    s: { x: b.x + b.w / 2, y: b.y + b.h },
+    w: { x: b.x, y: b.y + b.h / 2 },
+  };
+}
+
+// The shape's anchor nearest to a point, when one lies within threshold.
+export function nearestAnchor(el, point, threshold) {
+  let best = null;
+  for (const [name, p] of Object.entries(anchorPoints(el))) {
+    const distance = Math.hypot(point.x - p.x, point.y - p.y);
+    if (distance <= threshold && (!best || distance < best.distance)) best = { anchor: name, point: p, distance };
+  }
+  return best;
+}
+
 // Find the nearest bindable shape to a point (within BIND_PADDING of its
 // edge, or inside it). Returns { id, dx, dy } or undefined.
 export function bindPoint(items, point, excludeIds = []) {
@@ -772,32 +812,45 @@ export function bindPoint(items, point, excludeIds = []) {
   return best ? { id: best.id, dx: point.x - best.x, dy: point.y - best.y } : undefined;
 }
 
+// Like bindPoint, but glues to a named anchor (n/e/s/w) when the point lands
+// within threshold of one — connectors then stay pinned to that anchor even
+// as the shape moves and resizes. Falls back to a plain binding otherwise.
+export function bindWithAnchor(items, point, excludeIds = [], threshold = 12) {
+  const base = bindPoint(items, point, excludeIds);
+  if (!base) return undefined;
+  const target = items.find((el) => el.id === base.id);
+  const near = nearestAnchor(target, point, threshold);
+  return near ? { id: base.id, anchor: near.anchor, dx: base.dx, dy: base.dy } : base;
+}
+
 // Attach both endpoints of an arrow to whatever shapes they are near.
 export function rebindArrow(arrow, items) {
   const others = items.filter((el) => el.id !== arrow.id);
   return {
     ...arrow,
-    startBinding: bindPoint(others, { x: arrow.x, y: arrow.y }),
-    endBinding: bindPoint(others, { x: arrow.x + arrow.width, y: arrow.y + arrow.height }),
+    startBinding: bindWithAnchor(others, { x: arrow.x, y: arrow.y }),
+    endBinding: bindWithAnchor(others, { x: arrow.x + arrow.width, y: arrow.y + arrow.height }),
   };
 }
 
 // Re-resolve every bound arrow's geometry from its bindings and the current
 // positions of the shapes it is attached to. Absolute and idempotent, so it
-// is safe to call on every live pointer-move during a drag.
+// is safe to call on every live pointer-move during a drag. Anchor bindings
+// (connectors) resolve to the anchor midpoint of the shape's live bounds.
 export function syncBoundArrows(items) {
   const byId = new Map(items.map((item) => [item.id, item]));
+  const resolve = (target, binding) => (binding.anchor
+    ? anchorPoints(target)[binding.anchor]
+    : { x: target.x + binding.dx, y: target.y + binding.dy });
   return items.map((el) => {
     if (el.type !== 'arrow' || (!el.startBinding && !el.endBinding)) return el;
     let start = { x: el.x, y: el.y };
     let end = { x: el.x + el.width, y: el.y + el.height };
     if (el.startBinding && byId.has(el.startBinding.id)) {
-      const target = byId.get(el.startBinding.id);
-      start = { x: target.x + el.startBinding.dx, y: target.y + el.startBinding.dy };
+      start = resolve(byId.get(el.startBinding.id), el.startBinding);
     }
     if (el.endBinding && byId.has(el.endBinding.id)) {
-      const target = byId.get(el.endBinding.id);
-      end = { x: target.x + el.endBinding.dx, y: target.y + el.endBinding.dy };
+      end = resolve(byId.get(el.endBinding.id), el.endBinding);
     }
     return { ...el, x: start.x, y: start.y, width: end.x - start.x, height: end.y - start.y };
   });
