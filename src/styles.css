@@ -194,6 +194,27 @@ input[type="range"] { width: 100%; accent-color: var(--primary); height: 3px; cu
 .template small { color: var(--muted); font-size: 10px; }
 .template > svg:last-child { color: var(--muted); }
 .library-foot { border-top: 1px solid var(--border); padding-top: 13px; margin-top: 3px; font-size: 10px; color: var(--muted); }
+.library-search { width: 100%; height: 32px; margin: 13px 0 4px; padding: 0 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--hover); color: var(--ink); font-size: 12.5px; outline: none; box-sizing: border-box; }
+.library-search:focus { border-color: var(--primary); }
+.library-section { margin-top: 14px; }
+.library-section .eyebrow { margin-bottom: 2px; }
+.library-empty { margin: 8px 0 2px; font-size: 11.5px; line-height: 1.55; color: var(--muted); }
+.stencil-save { display: flex; gap: 7px; margin: 8px 0 4px; }
+.stencil-save input { flex: 1; min-width: 0; height: 30px; padding: 0 9px; border: 1px solid var(--border); border-radius: 7px; background: var(--hover); color: var(--ink); font-size: 12px; outline: none; }
+.stencil-save input:focus { border-color: var(--primary); }
+.stencil-save input:disabled { opacity: .5; }
+.stencil-save button { display: flex; align-items: center; gap: 5px; height: 30px; padding: 0 11px; border: 0; border-radius: 7px; background: var(--primary); color: #fff; font-size: 11.5px; font-weight: 600; cursor: pointer; }
+.stencil-save button:disabled { opacity: .4; cursor: default; }
+.template.stencil { display: flex; align-items: stretch; gap: 0; padding: 0; }
+.stencil-insert { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 10px 4px; border: 0; background: transparent; text-align: left; cursor: pointer; color: inherit; font: inherit; }
+.stencil-insert:hover { background: var(--hover); }
+.stencil-icon { width: 34px; height: 34px; flex: 0 0 34px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 7px; color: var(--primary); background: var(--hover); }
+.stencil-insert > span:nth-child(2) { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.stencil-insert strong { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stencil-insert small { color: var(--muted); font-size: 10px; }
+.stencil-insert > svg:last-child { color: var(--muted); flex: 0 0 auto; }
+.stencil-delete { align-self: center; width: 26px; height: 26px; color: var(--muted); }
+.stencil-delete:hover { color: var(--danger, #e03131); background: var(--hover); }
 
 .bottom-left { position: absolute; z-index: 12; left: 16px; bottom: 16px; display: flex; gap: 9px; }
 .zoom-controls, .history-controls { height: 42px; display: flex; align-items: center; padding: 3px; }

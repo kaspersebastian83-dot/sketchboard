@@ -19,7 +19,7 @@ import {
   STICKY_STATUSES, stickyBadgeCenter, onImageReady, pointInPolygon, perfectShape, nearestAnchor, bindWithAnchor,
 } from './engine.js';
 import { encodeShareHash, buildSnapshotHtml } from './share.js';
-import { loadWorkspace, saveWorkspace, importSceneToWorkspace } from './store.js';
+import { loadWorkspace, saveWorkspace, importSceneToWorkspace, loadStencils, saveStencils } from './store.js';
 import { parseTableText, buildChartElements } from './charts.js';
 import { tablesFromSpreadsheet } from './import.js';
 
@@ -138,6 +138,9 @@ export default function App() {
   const [size, setSize] = useState({ width: window.innerWidth, height: window.innerHeight });
   const [menuOpen, setMenuOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [stencils, setStencils] = useState(loadStencils);
+  const [libraryQuery, setLibraryQuery] = useState('');
+  useEffect(() => { saveStencils(stencils); }, [stencils]);
   const [modal, setModal] = useState(null);
   const [grid, setGrid] = useState(false);
   const [spacePressed, setSpacePressed] = useState(false);
@@ -1708,6 +1711,52 @@ export default function App() {
     setTool('selection');
   };
 
+  // --- Personal stencils ----------------------------------------------------
+  // Save the current selection as a named, reusable building block. Elements
+  // are normalized to their own little coordinate space (bbox min ≈ 12,12) so
+  // insertion just re-centers them; arrow bindings inside the selection keep
+  // working because insert remaps every id consistently.
+  const saveStencil = (name) => {
+    const ids = new Set(selectedIds);
+    const items = elements.filter((el) => ids.has(el.id));
+    if (!items.length) return;
+    const bounds = items.map((el) => elementBounds(el));
+    const minX = Math.min(...bounds.map((b) => b.x));
+    const minY = Math.min(...bounds.map((b) => b.y));
+    const normalized = items.map((el) => ({ ...el, x: el.x - minX + 12, y: el.y - minY + 12 }));
+    const stencil = { id: uid(), name, elements: normalized, createdAt: Date.now() };
+    setStencils((list) => [stencil, ...list]);
+    notify(`Saved “${name}” to your library`);
+  };
+
+  const insertStencil = (stencil) => {
+    const cx = (size.width / 2 - camera.x) / camera.zoom;
+    const cy = (size.height / 2 - camera.y) / camera.zoom;
+    const bounds = stencil.elements.map((el) => getBounds(el));
+    const minX = Math.min(...bounds.map((b) => b.x));
+    const minY = Math.min(...bounds.map((b) => b.y));
+    const maxX = Math.max(...bounds.map((b) => b.x + b.w));
+    const maxY = Math.max(...bounds.map((b) => b.y + b.h));
+    const dx = cx - (minX + maxX) / 2;
+    const dy = cy - (minY + maxY) / 2;
+    const idMap = new Map(stencil.elements.map((el) => [el.id, uid()]));
+    const groupId = uid();
+    const items = stencil.elements.map((el) => ({
+      ...el,
+      id: idMap.get(el.id),
+      groupId,
+      x: el.x + dx,
+      y: el.y + dy,
+      startBinding: el.startBinding && idMap.has(el.startBinding.id) ? { ...el.startBinding, id: idMap.get(el.startBinding.id) } : undefined,
+      endBinding: el.endBinding && idMap.has(el.endBinding.id) ? { ...el.endBinding, id: idMap.get(el.endBinding.id) } : undefined,
+    }));
+    commit((existing) => [...existing, ...items]);
+    setSelectedIds(items.map((el) => el.id));
+    setLibraryOpen(false);
+    setTool('selection');
+    notify(`Added “${stencil.name}”`);
+  };
+
   // Paste-to-chart: a copied spreadsheet range becomes a hand-drawn chart of
   // native elements, tagged with a shared chartId so it can be regenerated.
   const insertChart = useCallback((table, type = 'bar', chartId = uid(), at = null, source = 'Pasted a table', sheetName = undefined, fileName = undefined) => {
@@ -2350,11 +2399,45 @@ export default function App() {
 
       {libraryOpen && (
         <aside className="library-panel island">
-          <div className="panel-heading"><div><span className="eyebrow">STARTER LIBRARY</span><h2>A little head start</h2></div><button className="plain-icon" onClick={() => setLibraryOpen(false)} aria-label="Close library"><X size={18} /></button></div>
-          <p>Drop a hand-drawn building block onto your canvas.</p>
-          <button className="template" onClick={() => insertTemplate('flow')}><svg viewBox="0 0 100 58"><rect x="4" y="16" width="34" height="26" rx="3" /><path d="M64 8 L88 29 L64 50 L40 29 Z" /><path d="M39 29 L46 29 M42 25 L46 29 L42 33" /></svg><span><strong>Quick flow</strong><small>2 shapes + an arrow</small></span><Plus size={16} /></button>
-          <button className="template" onClick={() => insertTemplate('note')}><svg viewBox="0 0 100 58"><path d="M24 5 L78 7 L75 53 L20 50 Z" fill="#ffec99" /><path d="M32 20 L65 20 M32 29 L58 29 M32 38 L62 38" /></svg><span><strong>Sticky note</strong><small>For a thought in progress</small></span><Plus size={16} /></button>
-          <button className="template" onClick={() => insertTemplate('target')}><svg viewBox="0 0 100 58"><circle cx="50" cy="29" r="25" fill="#b2f2bb" /><circle cx="50" cy="29" r="15" /><circle cx="50" cy="29" r="3" /></svg><span><strong>Idea target</strong><small>Keep the big idea centered</small></span><Plus size={16} /></button>
+          <div className="panel-heading"><div><span className="eyebrow">LIBRARY</span><h2>Building blocks</h2></div><button className="plain-icon" onClick={() => setLibraryOpen(false)} aria-label="Close library"><X size={18} /></button></div>
+          <input
+            className="library-search"
+            aria-label="Search library"
+            placeholder="Search blocks…"
+            value={libraryQuery}
+            onChange={(event) => setLibraryQuery(event.target.value)}
+          />
+          <div className="library-section"><span className="eyebrow">YOUR STENCILS</span></div>
+          <form className="stencil-save" onSubmit={(event) => {
+            event.preventDefault();
+            const input = event.currentTarget.elements.namedItem('stencil-name');
+            const name = input.value.trim();
+            if (!name || !selectedIds.length) return;
+            saveStencil(name);
+            input.value = '';
+          }}>
+            <input name="stencil-name" aria-label="Stencil name" placeholder={selectedIds.length ? 'Name this selection…' : 'Select something first…'} disabled={!selectedIds.length} />
+            <button type="submit" aria-label="Save selection as stencil" disabled={!selectedIds.length} title="Save selection as stencil"><Plus size={15} /><span>Save</span></button>
+          </form>
+          {stencils.filter((s) => s.name.toLowerCase().includes(libraryQuery.toLowerCase())).map((stencil) => (
+            <div className="template stencil" key={stencil.id}>
+              <button className="stencil-insert" onClick={() => insertStencil(stencil)} aria-label={`Insert stencil ${stencil.name}`}>
+                <span className="stencil-icon"><LayoutGrid size={16} /></span>
+                <span><strong>{stencil.name}</strong><small>{stencil.elements.length} element{stencil.elements.length === 1 ? '' : 's'} · click to insert</small></span>
+                <Plus size={16} />
+              </button>
+              <button className="plain-icon stencil-delete" aria-label={`Delete stencil ${stencil.name}`} title="Delete stencil" onClick={() => { setStencils((list) => list.filter((s) => s.id !== stencil.id)); notify(`Deleted “${stencil.name}”`); }}><Trash2 size={14} /></button>
+            </div>
+          ))}
+          {!stencils.length && <p className="library-empty">Nothing saved yet — select anything on the canvas, name it, and keep it forever.</p>}
+          <div className="library-section"><span className="eyebrow">STARTERS</span></div>
+          {[
+            { name: 'Quick flow', hint: '2 shapes + an arrow', action: () => insertTemplate('flow'), icon: <svg viewBox="0 0 100 58"><rect x="4" y="16" width="34" height="26" rx="3" /><path d="M64 8 L88 29 L64 50 L40 29 Z" /><path d="M39 29 L46 29 M42 25 L46 29 L42 33" /></svg> },
+            { name: 'Sticky note', hint: 'For a thought in progress', action: () => insertTemplate('note'), icon: <svg viewBox="0 0 100 58"><path d="M24 5 L78 7 L75 53 L20 50 Z" fill="#ffec99" /><path d="M32 20 L65 20 M32 29 L58 29 M32 38 L62 38" /></svg> },
+            { name: 'Idea target', hint: 'Keep the big idea centered', action: () => insertTemplate('target'), icon: <svg viewBox="0 0 100 58"><circle cx="50" cy="29" r="25" fill="#b2f2bb" /><circle cx="50" cy="29" r="15" /><circle cx="50" cy="29" r="3" /></svg> },
+          ].filter((t) => t.name.toLowerCase().includes(libraryQuery.toLowerCase())).map((t) => (
+            <button className="template" key={t.name} onClick={t.action}>{t.icon}<span><strong>{t.name}</strong><small>{t.hint}</small></span><Plus size={16} /></button>
+          ))}
           <div className="library-foot">Personal library stays on this device.</div>
         </aside>
       )}
@@ -2530,7 +2613,7 @@ export default function App() {
               <div className="shortcuts">
                 {[['Select', 'V'], ['Lasso select', 'S'], ['Pan canvas', 'H, Space or right-drag'], ['Rectangle / Diamond', 'R / D'], ['Ellipse / Arrow', 'O / A'], ['Draw / Text', 'P / T'], ['Frame', 'F'], ['Find frame / jump to', '⌘ F'], ['Erase', 'E'], ['Perfect shape', 'Hold still, then release'], ['Bold / Italic', '⌘ B / ⌘ I'], ['Align left / center / right', '⇧ ⌘ L / C / R'], ['Group / Ungroup', '⌘ G / ⇧ ⌘ G'], ['Undo / Redo', '⌘ Z / ⇧ ⌘ Z'], ['Duplicate', '⌘ D'], ['Select all', '⌘ A'], ['Delete selection', 'Delete'], ['Zoom at cursor', 'Scroll'], ['Zoom in / out', '+ / −'], ['Zoom to fit', '⇧ 1'], ['Pan sideways', '⇧ Scroll'], ['Nudge selection', 'Arrow keys'], ['Sticky note', 'Double-click canvas'], ['Finish text', '⌘ Enter'], ['Zen mode', 'Z']].map(([label, key]) => <div key={label}><span>{label}</span><kbd>{key}</kbd></div>)}
               </div>
-              <p className="help-tip"><strong>Little tips:</strong> scroll to zoom toward your cursor, drag with the middle or right mouse button (or hold <kbd>Space</kbd>) to pan, and double-click the overview map to fit everything. Press <kbd>F</kbd> and drag to draw a frame — a named region that carries whatever you put inside it when dragged; double-click its name to rename, and press <kbd>⌘ F</kbd> to jump between frames. Sticky notes can wear a status dot, carry tags, and collect voting dots for retrospectives — click a note's badge to vote, right-click to take one back. Draw frames around your topics and press Present for a clean full-screen walkthrough — frames glide from one to the next with a slide as you click or press the arrow keys, move the mouse to point with a laser, press <kbd>I</kbd> to scribble fading ink over the frame, <kbd>Esc</kbd> to leave. The floating bars each have a small grip you can drag to rearrange them — the Main menu can reset their positions. Press <kbd>Z</kbd> for zen mode, a clean desk with nothing but the canvas — each board remembers its own preference, and starting a presentation borrows zen for a clean first frame, handing your desk back when the show ends. <kbd>Z</kbd> or <kbd>Esc</kbd> brings everything back. In a live session, guests follow your view and can point back at the board with their own cursors while you present. Paste cells copied from Excel or Sheets — or drop a .csv / .xlsx file on the board — to draw a chart, then double-click the chart to edit its numbers. Drop a file onto an existing chart to refresh its data in place. For live working sessions, Share → Live session starts a room on your network — guests join the link and everyone's cursors, edits, and the presenter's camera stay in sync. Hold <kbd>Shift</kbd> while resizing to preserve proportions, or while selecting to choose multiple elements. Drag a box around elements to select them — a grouped element pulls its whole group along. Click a selected group again to edit one member on its own. Paste or drop images — screenshots, photos, logos — straight onto the board; they move, resize (proportions stay locked), and export with everything else. The lasso tool (<kbd>S</kbd>) loops around the elements you want — content joins by its center, a frame only when the whole frame is inside. Drawing a shape and holding the pointer still for a beat before releasing snaps it to a perfect square, circle, diamond, or 45° line. With the arrow tool, hovering a shape reveals four connector anchors — drag from one to another shape's anchor and the arrow stays glued to those points as the shapes move and resize.</p>
+              <p className="help-tip"><strong>Little tips:</strong> scroll to zoom toward your cursor, drag with the middle or right mouse button (or hold <kbd>Space</kbd>) to pan, and double-click the overview map to fit everything. Press <kbd>F</kbd> and drag to draw a frame — a named region that carries whatever you put inside it when dragged; double-click its name to rename, and press <kbd>⌘ F</kbd> to jump between frames. Sticky notes can wear a status dot, carry tags, and collect voting dots for retrospectives — click a note's badge to vote, right-click to take one back. Draw frames around your topics and press Present for a clean full-screen walkthrough — frames glide from one to the next with a slide as you click or press the arrow keys, move the mouse to point with a laser, press <kbd>I</kbd> to scribble fading ink over the frame, <kbd>Esc</kbd> to leave. The floating bars each have a small grip you can drag to rearrange them — the Main menu can reset their positions. Press <kbd>Z</kbd> for zen mode, a clean desk with nothing but the canvas — each board remembers its own preference, and starting a presentation borrows zen for a clean first frame, handing your desk back when the show ends. <kbd>Z</kbd> or <kbd>Esc</kbd> brings everything back. In a live session, guests follow your view and can point back at the board with their own cursors while you present. Paste cells copied from Excel or Sheets — or drop a .csv / .xlsx file on the board — to draw a chart, then double-click the chart to edit its numbers. Drop a file onto an existing chart to refresh its data in place. For live working sessions, Share → Live session starts a room on your network — guests join the link and everyone's cursors, edits, and the presenter's camera stay in sync. Hold <kbd>Shift</kbd> while resizing to preserve proportions, or while selecting to choose multiple elements. Drag a box around elements to select them — a grouped element pulls its whole group along. Click a selected group again to edit one member on its own. Paste or drop images — screenshots, photos, logos — straight onto the board; they move, resize (proportions stay locked), and export with everything else. The lasso tool (<kbd>S</kbd>) loops around the elements you want — content joins by its center, a frame only when the whole frame is inside. Drawing a shape and holding the pointer still for a beat before releasing snaps it to a perfect square, circle, diamond, or 45° line. With the arrow tool, hovering a shape reveals four connector anchors — drag from one to another shape's anchor and the arrow stays glued to those points as the shapes move and resize. The Library panel keeps your own stencils too: select anything, give it a name, and insert it again whenever you need it — searchable, and saved on this device.</p>
               <a className="github-link" href="https://github.com/kaspersebastian83-dot/sketchboard" target="_blank" rel="noreferrer"><Github size={15} />Star Sketchboard on GitHub</a>
             </>}
             {modal === 'rename' && <>

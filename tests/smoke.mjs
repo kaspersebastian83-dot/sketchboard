@@ -686,6 +686,41 @@ try {
   await page.keyboard.press('Delete');
   await expect.poll(async () => (await scene(page)).length).toBe(elsBeforeConnect);
 
+  // Personal stencils: save the selection, search the list, insert a remapped
+  // copy, and delete it again. Screen = world + (3200, 2400) still.
+  await page.getByTestId('tool-rectangle').click();
+  await drag(page, 300, 300, 420, 400);
+  await page.getByRole('button', { name: 'Library', exact: true }).click();
+  await page.getByLabel('Stencil name').fill('Test block');
+  await page.getByLabel('Stencil name').press('Enter');
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('sketchboard-stencils-v1') || '[]').length)).toBe(1);
+  const savedStencil = await page.evaluate(() => JSON.parse(localStorage.getItem('sketchboard-stencils-v1'))[0]);
+  expect(savedStencil.name).toBe('Test block');
+  expect(savedStencil.elements.length).toBe(1);
+  expect(Math.min(...savedStencil.elements.map((el) => el.x))).toBeGreaterThanOrEqual(12); // normalized to its own space
+  // Inserting drops a remapped, grouped copy at the viewport center.
+  const countBeforeStencil = (await scene(page)).length;
+  await page.getByLabel('Insert stencil Test block').click();
+  await expect.poll(async () => (await scene(page)).length).toBe(countBeforeStencil + 1);
+  const inserted = (await scene(page)).at(-1);
+  expect(inserted.groupId).toBeTruthy();
+  expect(inserted.id).not.toBe(savedStencil.elements[0].id);
+  // Search filters both stencils and starters.
+  await page.getByRole('button', { name: 'Library', exact: true }).click();
+  await page.getByLabel('Search library').fill('nope');
+  await expect(page.getByLabel('Insert stencil Test block')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Quick flow/ })).toHaveCount(0);
+  await page.getByLabel('Search library').fill('');
+  await expect(page.getByLabel('Insert stencil Test block')).toHaveCount(1);
+  // Deleting removes it from the library.
+  await page.getByLabel('Delete stencil Test block').click();
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('sketchboard-stencils-v1') || '[]').length)).toBe(0);
+  await page.keyboard.press('Escape');
+  // Clean the canvas: the drawn source rect and the inserted copy.
+  await drag(page, 200, 200, 1120, 800);
+  await page.keyboard.press('Delete');
+  await expect.poll(async () => (await scene(page)).length).toBe(elsBeforeConnect);
+
   // Frames: named regions that carry their contents, with a jump-to list.
   // Teleport far from the seeded board; screen = world − (1600, 1000).
   await page.evaluate(() => {

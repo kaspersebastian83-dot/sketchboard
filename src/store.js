@@ -30,6 +30,24 @@ export function saveWorkspace(workspace) {
   try { localStorage.setItem(WORKSPACE_KEY, JSON.stringify(workspace)); } catch { /* Storage can be full or disabled. */ }
 }
 
+// --- Personal stencil library -------------------------------------------------
+// Reusable building blocks saved from the canvas: normalized element bundles
+// in their own key so they survive board switches and live outside the workspace.
+
+const STENCILS_KEY = 'sketchboard-stencils-v1';
+
+export function loadStencils() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(STENCILS_KEY));
+    if (Array.isArray(raw)) return raw.filter((s) => s.id && s.name && Array.isArray(s.elements));
+  } catch { /* Treat as empty below. */ }
+  return [];
+}
+
+export function saveStencils(stencils) {
+  try { localStorage.setItem(STENCILS_KEY, JSON.stringify(stencils)); } catch { /* Quota or disabled storage. */ }
+}
+
 // Write a standalone scene (e.g. a shared board being saved) into the active board.
 export function importSceneToWorkspace(scene) {
   const workspace = loadWorkspace();
