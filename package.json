@@ -1,0 +1,26 @@
+{
+  "name": "sketchboard",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "build:standalone": "SKETCHBOARD_STANDALONE=1 vite build && node scripts/build-standalone.mjs",
+    "preview": "vite preview --host 0.0.0.0",
+    "test": "node tests/smoke.mjs",
+    "test:standalone": "node tests/standalone.mjs"
+  },
+  "dependencies": {
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "roughjs": "^4.6.6",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.51.0",
+    "vite": "^6.1.0",
+    "ws": "^8.22.0"
+  }
+}

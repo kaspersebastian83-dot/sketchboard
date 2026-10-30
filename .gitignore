@@ -1,0 +1,12 @@
+# Dependencies and build output
+node_modules/
+dist/
+
+# Local debug artifacts
+dbg-*.mjs
+screenshots/
+*.log
+tests/*.png
+
+# OS noise
+.DS_Store
