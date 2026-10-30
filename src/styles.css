@@ -402,6 +402,12 @@ kbd { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 }
 .zen-hint kbd { font: 11px -apple-system, sans-serif; color: var(--faint); }
 @keyframes zen-hint-fade { to { opacity: 0; } }
+.github-link {
+  display: inline-flex; align-items: center; gap: 7px; margin-top: 16px;
+  font-size: 12.5px; font-weight: 550; color: var(--muted); text-decoration: none;
+  border: 1px solid var(--border); border-radius: 999px; padding: 7px 14px;
+}
+.github-link:hover { color: var(--ink); background: var(--hover); }
 
 /* Presentation mode: the canvas stays visible, the chrome steps aside. */
 .app.presenting .toolbar, .app.presenting .top-left, .app.presenting .top-right,
