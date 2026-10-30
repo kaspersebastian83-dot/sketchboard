@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -25,3 +25,9 @@ html = html
 const output = path.join(root, 'sketchboard.html');
 await writeFile(output, html);
 console.log(`Created ${output} (${(Buffer.byteLength(html) / 1024).toFixed(0)} KB)`);
+
+// GitHub Pages serves the app from /docs — keep that copy in lockstep.
+const docsDir = path.join(root, 'docs');
+await mkdir(docsDir, { recursive: true });
+await writeFile(path.join(docsDir, 'index.html'), html);
+console.log(`Created ${path.join(docsDir, 'index.html')} (GitHub Pages)`);
