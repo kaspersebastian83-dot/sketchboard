@@ -566,6 +566,87 @@ try {
   await expect.poll(async () => (await chartEls()).length).toBe(0);
   await page.mouse.click(60, 500); // deselect
 
+  // Lasso + draw-and-hold: a freehand loop selects by center point, and holding
+  // the pointer still before releasing snaps a fresh shape to its perfect form.
+  // Teleport to an empty region; screen = world + (3200, 2400).
+  await page.evaluate(() => {
+    const ws = JSON.parse(localStorage.getItem('sketchboard-workspace-v1'));
+    localStorage.setItem('sketchboard-workspace-v1', JSON.stringify({
+      ...ws,
+      boards: ws.boards.map((b) => b.id === ws.activeBoardId ? { ...b, camera: { x: 3200, y: 2400, zoom: 1 } } : b),
+    }));
+  });
+  await page.reload();
+  await page.waitForFunction(() => window.__renderStats);
+  const elsBefore = (await scene(page)).length;
+  await page.getByTestId('tool-rectangle').click();
+  await drag(page, 300, 300, 420, 400);
+  await page.getByTestId('tool-rectangle').click();
+  await drag(page, 900, 300, 1020, 400);
+  const drawn = (await scene(page)).slice(elsBefore);
+  expect(drawn.length).toBe(2);
+  const [rectA, rectB] = drawn;
+  // A lasso loop around rect A selects just A (content joins by center point).
+  const lassoAround = async (cx, cy, rx, ry, shift = false) => {
+    if (shift) await page.keyboard.down('Shift');
+    await page.mouse.move(cx - rx, cy - ry);
+    await page.mouse.down();
+    for (const [px, py] of [[cx + rx, cy - ry], [cx + rx, cy + ry], [cx - rx, cy + ry], [cx - rx, cy - ry]]) {
+      await page.mouse.move(px, py, { steps: 4 });
+    }
+    await page.mouse.up();
+    if (shift) await page.keyboard.up('Shift');
+  };
+  await page.getByTestId('tool-lasso').click();
+  await lassoAround(360, 350, 120, 110);
+  await expect.poll(() => page.evaluate(() => window.__selectedIds ?? [])).toEqual([rectA.id]);
+  // Shift-lasso around rect B adds it to the selection.
+  await lassoAround(960, 350, 120, 110, true);
+  await expect.poll(() => page.evaluate(() => [...(window.__selectedIds ?? [])].sort())).toEqual([rectA.id, rectB.id].sort());
+  // A lasso around empty space clears the selection.
+  await lassoAround(700, 650, 150, 100);
+  await expect.poll(() => page.evaluate(() => window.__selectedIds ?? [])).toEqual([]);
+  // Draw-and-hold: drawing a wide rectangle and holding still snaps it to a
+  // 160×160 square centered on the drawn box; a quick drag stays a rectangle.
+  await page.getByTestId('tool-rectangle').click();
+  await page.mouse.move(300, 600);
+  await page.mouse.down();
+  await page.mouse.move(460, 660, { steps: 6 });
+  await page.waitForTimeout(850); // hold still before releasing
+  await page.mouse.up();
+  const heldRect = (await scene(page)).at(-1);
+  expect(Math.abs(heldRect.width - heldRect.height)).toBeLessThan(1);
+  expect(Math.abs(heldRect.width - 160)).toBeLessThan(2);
+  expect(Math.abs(heldRect.x - -2900)).toBeLessThan(2);
+  expect(Math.abs(heldRect.y - -1850)).toBeLessThan(2);
+  await page.getByTestId('tool-rectangle').click();
+  await drag(page, 300, 700, 400, 760); // quick release: proportions untouched
+  const quickRect = (await scene(page)).at(-1);
+  expect(Math.abs(quickRect.width - 100)).toBeLessThan(2);
+  expect(Math.abs(quickRect.height - 60)).toBeLessThan(2);
+  // Lines keep their length but snap to the nearest 45° when held.
+  await page.getByTestId('tool-line').click();
+  await page.mouse.move(600, 600);
+  await page.mouse.down();
+  await page.mouse.move(680, 660, { steps: 6 });
+  await page.waitForTimeout(850);
+  await page.mouse.up();
+  const heldLine = (await scene(page)).at(-1);
+  expect(heldLine.type).toBe('line');
+  expect(Math.abs(heldLine.width - heldLine.height)).toBeLessThan(1.5);
+  expect(Math.abs(Math.hypot(heldLine.width, heldLine.height) - 100)).toBeLessThan(2);
+  await page.getByTestId('tool-line').click();
+  await drag(page, 600, 700, 680, 760); // quick release: angle untouched
+  const quickLine = (await scene(page)).at(-1);
+  expect(Math.abs(quickLine.width - 80)).toBeLessThan(2);
+  expect(Math.abs(quickLine.height - 60)).toBeLessThan(2);
+  // Marquee the test region and delete it so later tests see a clean board.
+  await page.keyboard.press('Escape'); // clear selection so the style panel can't swallow the drag
+  await page.getByTestId('tool-selection').click();
+  await drag(page, 200, 200, 1120, 800);
+  await page.keyboard.press('Delete');
+  await expect.poll(async () => (await scene(page)).length).toBe(elsBefore);
+
   // Frames: named regions that carry their contents, with a jump-to list.
   // Teleport far from the seeded board; screen = world − (1600, 1000).
   await page.evaluate(() => {
@@ -1027,7 +1108,7 @@ try {
   expect(await mobile.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
   expect(errors).toEqual([]);
-  console.log('PASS: draw, move, duplicate, undo/redo, text, stickies, smart arrows, snap guides, infinite zoom, minimap, mouse navigation, gesture coach, paste-to-chart, images, file drop, freehand, zoom, PNG/SVG/sketch export, theme, persistence, share, boards, migration, frames, sticky tags and votes, presentation mode, fading ink, movable panels, zen mode, live collaboration, help, and mobile layout.');
+  console.log('PASS: draw, move, duplicate, undo/redo, text, stickies, smart arrows, snap guides, infinite zoom, minimap, mouse navigation, gesture coach, paste-to-chart, images, file drop, lasso select, draw-and-hold, freehand, zoom, PNG/SVG/sketch export, theme, persistence, share, boards, migration, frames, sticky tags and votes, presentation mode, fading ink, movable panels, zen mode, live collaboration, help, and mobile layout.');
 } finally {
   if (browser) await browser.close();
   server.kill('SIGTERM');

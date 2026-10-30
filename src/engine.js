@@ -56,6 +56,41 @@ export function getBounds(el) {
   };
 }
 
+// --- Lasso + draw-and-hold helpers --------------------------------------------
+
+// Even-odd ray cast; the lasso tool uses it against element centers.
+export function pointInPolygon(x, y, polygon) {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const [xi, yi] = polygon[i];
+    const [xj, yj] = polygon[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+// The "perfect" form of a freshly drawn shape — what draw-and-hold snaps to.
+// Shapes become regular (square, circle, equal-diagonal diamond) centered on
+// the drawn box; lines and arrows keep their length but snap to 45° steps.
+export function perfectShape(el) {
+  if (el.type === 'line' || el.type === 'arrow') {
+    const len = Math.hypot(el.width, el.height);
+    if (len < 2) return el;
+    const step = Math.PI / 4;
+    const angle = Math.round(Math.atan2(el.height, el.width) / step) * step;
+    return { ...el, width: len * Math.cos(angle), height: len * Math.sin(angle) };
+  }
+  const side = Math.max(Math.abs(el.width), Math.abs(el.height));
+  if (side < 2) return el;
+  return {
+    ...el,
+    x: el.x + el.width / 2 - side / 2,
+    y: el.y + el.height / 2 - side / 2,
+    width: side,
+    height: side,
+  };
+}
+
 // --- Image elements ---------------------------------------------------------
 // Images are stored as data URLs on the element itself (so boards persist and
 // the standalone build stays offline), decoded through a shared cache. Decoding

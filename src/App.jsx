@@ -8,7 +8,7 @@ import {
   Group, Ungroup, AlignStartVertical, AlignCenterVertical, AlignEndVertical,
   AlignStartHorizontal, AlignCenterHorizontal, AlignEndHorizontal, Link2, LayoutGrid,
   Mouse, Magnet, FileUp, Frame, Play, ChevronLeft, ChevronRight, Radio, Crown, LogOut, Users,
-  GripVertical, Eye, Github, ImagePlus,
+  GripVertical, Eye, Github, ImagePlus, LassoSelect,
 } from 'lucide-react';
 import {
   collabAvailable, generateName, generateRoomCode, liveRoomFromUrl, liveJoinUrl, connectCollab,
@@ -16,7 +16,7 @@ import {
 import {
   uid, getBounds, elementBounds, hitTest, hitHandle, resizeElement, resizeSelection, selectionBounds, drawScene, sceneBounds,
   exportPng, exportSvg, SELECTION_COLOR, renderStats, bindPoint, rebindArrow, syncBoundArrows, pruneBindings, snapToGuides,
-  STICKY_STATUSES, stickyBadgeCenter, onImageReady,
+  STICKY_STATUSES, stickyBadgeCenter, onImageReady, pointInPolygon, perfectShape,
 } from './engine.js';
 import { encodeShareHash, buildSnapshotHtml } from './share.js';
 import { loadWorkspace, saveWorkspace, importSceneToWorkspace } from './store.js';
@@ -30,6 +30,7 @@ const DEFAULT_STYLE = {
 const TOOLS = [
   { id: 'hand', icon: Hand, label: 'Hand — pan canvas', key: 'H' },
   { id: 'selection', icon: MousePointer2, label: 'Selection', key: 'V' },
+  { id: 'lasso', icon: LassoSelect, label: 'Lasso select', key: 'S' },
   { id: 'rectangle', icon: Square, label: 'Rectangle', key: 'R' },
   { id: 'diamond', icon: Diamond, label: 'Diamond', key: 'D' },
   { id: 'ellipse', icon: Circle, label: 'Ellipse', key: 'O' },
@@ -142,6 +143,7 @@ export default function App() {
   const [spacePressed, setSpacePressed] = useState(false);
   const [textEditor, setTextEditor] = useState(null);
   const [marquee, setMarquee] = useState(null);
+  const [lassoPath, setLassoPath] = useState(null);
   const [toast, setToast] = useState('');
   const [cursor, setCursor] = useState('default');
   const [boardsOpen, setBoardsOpen] = useState(false);
@@ -196,6 +198,20 @@ export default function App() {
   const canvasRef = useRef(null);
   const appRef = useRef(null);
   const interaction = useRef(null);
+  const holdTimer = useRef(null);
+  // Shape tools that snap to a perfect form when the pointer rests before release.
+  const HOLD_SNAP_TOOLS = ['rectangle', 'ellipse', 'diamond', 'arrow', 'line'];
+  const HOLD_SNAP_MS = 600;
+  const scheduleHoldSnap = (active) => {
+    if (!HOLD_SNAP_TOOLS.includes(active.tool)) return;
+    if (holdTimer.current) clearTimeout(holdTimer.current);
+    holdTimer.current = setTimeout(() => {
+      const current = interaction.current;
+      if (!current || current.type !== 'create' || current.id !== active.id) return;
+      if (performance.now() - (current.lastMove || 0) < HOLD_SNAP_MS) return;
+      updateElements(elementsRef.current.map((el) => (el.id === active.id ? perfectShape(el) : el)));
+    }, HOLD_SNAP_MS + 50);
+  };
   const fileInputRef = useRef(null);
   const imageInputRef = useRef(null);
   const toastTimer = useRef(null);
@@ -1258,6 +1274,15 @@ export default function App() {
       }
       return;
     }
+    if (tool === 'lasso') {
+      if (!event.shiftKey) setSelectedIds([]);
+      interaction.current = {
+        type: 'lasso', before, points: [[point.x, point.y]], screenPoints: [screen],
+        shift: event.shiftKey, initialSelection: selectedIds,
+      };
+      setLassoPath([screen]);
+      return;
+    }
     if (tool === 'eraser') {
       const hit = [...before].reverse().find((el) => hitTest(el, point, 10 / camera.zoom));
       updateElements(hit ? pruneBindings(before.filter((el) => el.id !== hit.id)) : before);
@@ -1274,7 +1299,8 @@ export default function App() {
     if (tool === 'freedraw') el.points = [[0, 0]];
     if (tool === 'frame') el.name = `Frame ${before.filter((item) => item.type === 'frame').length + 1}`;
     updateElements([...before, el]);
-    interaction.current = { type: 'create', before, id: el.id, start: point, tool };
+    interaction.current = { type: 'create', before, id: el.id, start: point, tool, lastMove: performance.now() };
+    scheduleHoldSnap(interaction.current);
   };
 
   const onPointerMove = (event) => {
@@ -1352,12 +1378,23 @@ export default function App() {
       setMarquee({ start: active.screenStart, current: screen, startWorld: active.start, currentWorld: point });
       return;
     }
+    if (active.type === 'lasso') {
+      const last = active.points[active.points.length - 1];
+      if (Math.hypot(point.x - last[0], point.y - last[1]) >= 2 / camera.zoom) {
+        active.points.push([point.x, point.y]);
+        active.screenPoints.push(screen);
+        setLassoPath([...active.screenPoints]);
+      }
+      return;
+    }
     if (active.type === 'erase') {
       const hit = [...elementsRef.current].reverse().find((el) => hitTest(el, point, 10 / camera.zoom));
       if (hit) updateElements(pruneBindings(elementsRef.current.filter((el) => el.id !== hit.id)));
       return;
     }
     if (active.type === 'create') {
+      active.lastMove = performance.now();
+      scheduleHoldSnap(active);
       updateElements(elementsRef.current.map((el) => {
         if (el.id !== active.id) return el;
         if (active.tool === 'freedraw') {
@@ -1374,6 +1411,30 @@ export default function App() {
   const onPointerUp = () => {
     const active = interaction.current;
     if (!active) return;
+    if (holdTimer.current) { clearTimeout(holdTimer.current); holdTimer.current = null; }
+    if (active.type === 'lasso') {
+      // Close the loop around whatever's inside: content by center point,
+      // frames only when the loop contains all four corners.
+      const polygon = active.points;
+      if (polygon.length > 2) {
+        const ids = elementsRef.current.filter((el) => {
+          const b = elementBounds(el);
+          if (el.type === 'frame') {
+            return [[b.x, b.y], [b.x + b.w, b.y], [b.x, b.y + b.h], [b.x + b.w, b.y + b.h]]
+              .every(([cx, cy]) => pointInPolygon(cx, cy, polygon));
+          }
+          return pointInPolygon(b.x + b.w / 2, b.y + b.h / 2, polygon);
+        }).map((el) => el.id);
+        const merged = new Set(active.shift ? [...active.initialSelection, ...ids] : ids);
+        for (const el of elementsRef.current) {
+          if (el.groupId && merged.has(el.id)) {
+            elementsRef.current.forEach((mate) => { if (mate.groupId === el.groupId) merged.add(mate.id); });
+          }
+        }
+        setSelectedIds([...merged]);
+      }
+      setLassoPath(null);
+    }
     if (active.type === 'marquee' && marquee) {
       const x = Math.min(marquee.startWorld.x, marquee.currentWorld.x);
       const y = Math.min(marquee.startWorld.y, marquee.currentWorld.y);
@@ -1394,6 +1455,10 @@ export default function App() {
       setMarquee(null);
     }
     if (active.type === 'create') {
+      // Released after holding still: snap to the perfect shape if the timer didn't fire.
+      if (HOLD_SNAP_TOOLS.includes(active.tool) && performance.now() - (active.lastMove || 0) >= HOLD_SNAP_MS) {
+        updateElements(elementsRef.current.map((el) => (el.id === active.id ? perfectShape(el) : el)));
+      }
       const created = elementsRef.current.find((el) => el.id === active.id);
       const b = created ? getBounds(created) : null;
       const tooSmall = active.tool !== 'freedraw' && active.tool !== 'frame' && b.w < 2 && b.h < 2;
@@ -1881,7 +1946,7 @@ export default function App() {
     setPresentIndex(nextIndex);
     transitionToFrame(getBounds(framesSorted[nextIndex]));
   };
-  const showProperties = selectedIds.length > 0 || !['selection', 'hand', 'eraser'].includes(tool);
+  const showProperties = selectedIds.length > 0 || !['selection', 'lasso', 'hand', 'eraser'].includes(tool);
   const singleImage = selectedIds.length === 1 && selectedElements[0]?.type === 'image';
   const canvasBackground = theme === 'dark' ? '#141414' : '#ffffff';
   const editorPosition = textEditor ? { left: textEditor.x * camera.zoom + camera.x, top: textEditor.y * camera.zoom + camera.y } : null;
@@ -2364,7 +2429,12 @@ export default function App() {
           />
         );
       })()}
-      {marquee && <div className="marquee" style={{ left: Math.min(marquee.start.x, marquee.current.x), top: Math.min(marquee.start.y, marquee.current.y), width: Math.abs(marquee.current.x - marquee.start.x), height: Math.abs(marquee.current.y - marquee.start.y) }} />}      {guides && guides.map((guide, index) => guide.axis === 'v'
+      {marquee && <div className="marquee" style={{ left: Math.min(marquee.start.x, marquee.current.x), top: Math.min(marquee.start.y, marquee.current.y), width: Math.abs(marquee.current.x - marquee.start.x), height: Math.abs(marquee.current.y - marquee.start.y) }} />}
+      {lassoPath && lassoPath.length > 1 && (
+        <svg className="lasso-overlay" aria-hidden="true">
+          <polygon points={lassoPath.map((p) => `${p.x},${p.y}`).join(' ')} />
+        </svg>
+      )}      {guides && guides.map((guide, index) => guide.axis === 'v'
         ? <div key={`g${index}`} className="snap-guide v" style={{ left: guide.position * camera.zoom + camera.x }} />
         : <div key={`g${index}`} className="snap-guide h" style={{ top: guide.position * camera.zoom + camera.y }} />)}
       {selectedChart && (
@@ -2416,9 +2486,9 @@ export default function App() {
             {modal === 'help' && <>
               <span className="eyebrow">WORK AT THE SPEED OF THOUGHT</span><h2>Keyboard shortcuts</h2>
               <div className="shortcuts">
-                {[['Select', 'V'], ['Pan canvas', 'H, Space or right-drag'], ['Rectangle / Diamond', 'R / D'], ['Ellipse / Arrow', 'O / A'], ['Draw / Text', 'P / T'], ['Frame', 'F'], ['Find frame / jump to', '⌘ F'], ['Erase', 'E'], ['Bold / Italic', '⌘ B / ⌘ I'], ['Align left / center / right', '⇧ ⌘ L / C / R'], ['Group / Ungroup', '⌘ G / ⇧ ⌘ G'], ['Undo / Redo', '⌘ Z / ⇧ ⌘ Z'], ['Duplicate', '⌘ D'], ['Select all', '⌘ A'], ['Delete selection', 'Delete'], ['Zoom at cursor', 'Scroll'], ['Zoom in / out', '+ / −'], ['Zoom to fit', '⇧ 1'], ['Pan sideways', '⇧ Scroll'], ['Nudge selection', 'Arrow keys'], ['Sticky note', 'Double-click canvas'], ['Finish text', '⌘ Enter'], ['Zen mode', 'Z']].map(([label, key]) => <div key={label}><span>{label}</span><kbd>{key}</kbd></div>)}
+                {[['Select', 'V'], ['Lasso select', 'S'], ['Pan canvas', 'H, Space or right-drag'], ['Rectangle / Diamond', 'R / D'], ['Ellipse / Arrow', 'O / A'], ['Draw / Text', 'P / T'], ['Frame', 'F'], ['Find frame / jump to', '⌘ F'], ['Erase', 'E'], ['Perfect shape', 'Hold still, then release'], ['Bold / Italic', '⌘ B / ⌘ I'], ['Align left / center / right', '⇧ ⌘ L / C / R'], ['Group / Ungroup', '⌘ G / ⇧ ⌘ G'], ['Undo / Redo', '⌘ Z / ⇧ ⌘ Z'], ['Duplicate', '⌘ D'], ['Select all', '⌘ A'], ['Delete selection', 'Delete'], ['Zoom at cursor', 'Scroll'], ['Zoom in / out', '+ / −'], ['Zoom to fit', '⇧ 1'], ['Pan sideways', '⇧ Scroll'], ['Nudge selection', 'Arrow keys'], ['Sticky note', 'Double-click canvas'], ['Finish text', '⌘ Enter'], ['Zen mode', 'Z']].map(([label, key]) => <div key={label}><span>{label}</span><kbd>{key}</kbd></div>)}
               </div>
-              <p className="help-tip"><strong>Little tips:</strong> scroll to zoom toward your cursor, drag with the middle or right mouse button (or hold <kbd>Space</kbd>) to pan, and double-click the overview map to fit everything. Press <kbd>F</kbd> and drag to draw a frame — a named region that carries whatever you put inside it when dragged; double-click its name to rename, and press <kbd>⌘ F</kbd> to jump between frames. Sticky notes can wear a status dot, carry tags, and collect voting dots for retrospectives — click a note's badge to vote, right-click to take one back. Draw frames around your topics and press Present for a clean full-screen walkthrough — frames glide from one to the next with a slide as you click or press the arrow keys, move the mouse to point with a laser, press <kbd>I</kbd> to scribble fading ink over the frame, <kbd>Esc</kbd> to leave. The floating bars each have a small grip you can drag to rearrange them — the Main menu can reset their positions. Press <kbd>Z</kbd> for zen mode, a clean desk with nothing but the canvas — each board remembers its own preference, and starting a presentation borrows zen for a clean first frame, handing your desk back when the show ends. <kbd>Z</kbd> or <kbd>Esc</kbd> brings everything back. In a live session, guests follow your view and can point back at the board with their own cursors while you present. Paste cells copied from Excel or Sheets — or drop a .csv / .xlsx file on the board — to draw a chart, then double-click the chart to edit its numbers. Drop a file onto an existing chart to refresh its data in place. For live working sessions, Share → Live session starts a room on your network — guests join the link and everyone's cursors, edits, and the presenter's camera stay in sync. Hold <kbd>Shift</kbd> while resizing to preserve proportions, or while selecting to choose multiple elements. Drag a box around elements to select them — a grouped element pulls its whole group along. Click a selected group again to edit one member on its own. Paste or drop images — screenshots, photos, logos — straight onto the board; they move, resize (proportions stay locked), and export with everything else.</p>
+              <p className="help-tip"><strong>Little tips:</strong> scroll to zoom toward your cursor, drag with the middle or right mouse button (or hold <kbd>Space</kbd>) to pan, and double-click the overview map to fit everything. Press <kbd>F</kbd> and drag to draw a frame — a named region that carries whatever you put inside it when dragged; double-click its name to rename, and press <kbd>⌘ F</kbd> to jump between frames. Sticky notes can wear a status dot, carry tags, and collect voting dots for retrospectives — click a note's badge to vote, right-click to take one back. Draw frames around your topics and press Present for a clean full-screen walkthrough — frames glide from one to the next with a slide as you click or press the arrow keys, move the mouse to point with a laser, press <kbd>I</kbd> to scribble fading ink over the frame, <kbd>Esc</kbd> to leave. The floating bars each have a small grip you can drag to rearrange them — the Main menu can reset their positions. Press <kbd>Z</kbd> for zen mode, a clean desk with nothing but the canvas — each board remembers its own preference, and starting a presentation borrows zen for a clean first frame, handing your desk back when the show ends. <kbd>Z</kbd> or <kbd>Esc</kbd> brings everything back. In a live session, guests follow your view and can point back at the board with their own cursors while you present. Paste cells copied from Excel or Sheets — or drop a .csv / .xlsx file on the board — to draw a chart, then double-click the chart to edit its numbers. Drop a file onto an existing chart to refresh its data in place. For live working sessions, Share → Live session starts a room on your network — guests join the link and everyone's cursors, edits, and the presenter's camera stay in sync. Hold <kbd>Shift</kbd> while resizing to preserve proportions, or while selecting to choose multiple elements. Drag a box around elements to select them — a grouped element pulls its whole group along. Click a selected group again to edit one member on its own. Paste or drop images — screenshots, photos, logos — straight onto the board; they move, resize (proportions stay locked), and export with everything else. The lasso tool (<kbd>S</kbd>) loops around the elements you want — content joins by its center, a frame only when the whole frame is inside. Drawing a shape and holding the pointer still for a beat before releasing snaps it to a perfect square, circle, diamond, or 45° line.</p>
               <a className="github-link" href="https://github.com/kaspersebastian83-dot/sketchboard" target="_blank" rel="noreferrer"><Github size={15} />Star Sketchboard on GitHub</a>
             </>}
             {modal === 'rename' && <>
