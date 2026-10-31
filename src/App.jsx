@@ -169,11 +169,13 @@ export default function App() {
   const [presentIndex, setPresentIndex] = useState(null);
   const [live, setLive] = useState(null); // { room, self, roster, hostId }
   const [livePanelOpen, setLivePanelOpen] = useState(false);
-  const [liveCursors, setLiveCursors] = useState({}); // memberId -> { wx, wy }
-  const [following, setFollowing] = useState(true);
+  const [liveCursors, setLiveCursors] = useState({}); // memberId -> { wx, wy, idle }
+  const [liveFollowers, setLiveFollowers] = useState(() => new Set()); // memberIds following the presenter
+  const [following, setFollowing] = useState(false); // following is opt-in, never automatic
   const liveConnRef = useRef(null);
   const liveRef = useRef(null);
-  const followRef = useRef(true);
+  const followRef = useRef(false);
+  const cursorTimersRef = useRef({}); // memberId -> timeout that fades their name tag
   const pendingRoomRef = useRef(null);
   const lastRemoteRef = useRef({ elements: null, camera: null });
   const lastHostCameraRef = useRef(null);
@@ -544,7 +546,6 @@ export default function App() {
     const onWheel = (event) => {
       event.preventDefault();
       if (flyRaf.current) { cancelAnimationFrame(flyRaf.current); flyRaf.current = null; }
-      pauseFollowing();
       const rect = canvas.getBoundingClientRect();
       const sx = event.clientX - rect.left;
       const sy = event.clientY - rect.top;
@@ -742,7 +743,7 @@ export default function App() {
       if (event.key === '?') { setModal('help'); return; }
       if (event.key === '+' || event.key === '=') { zoomAt(size.width / 2, size.height / 2, camera.zoom * 1.2); return; }
       if (event.key === '-') { zoomAt(size.width / 2, size.height / 2, camera.zoom / 1.2); return; }
-      if (event.code === 'Digit1' && event.shiftKey) { fitToScreen(); pauseFollowing(); return; }
+      if (event.code === 'Digit1' && event.shiftKey) { fitToScreen(); return; }
       if (selectedIds.length && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
         event.preventDefault();
         const delta = event.shiftKey ? 10 : 1;
@@ -980,17 +981,21 @@ export default function App() {
 
   const leaveLive = useCallback((announce = true) => {
     liveConnRef.current?.send({ t: 'cursor-clear' });
+    liveConnRef.current?.send({ t: 'follow', on: false });
     liveConnRef.current?.close();
     liveConnRef.current = null;
     liveRef.current = null;
     pendingRoomRef.current = null;
     lastRemoteRef.current = { elements: null, camera: null };
     lastHostCameraRef.current = null;
-    followRef.current = true;
+    followRef.current = false;
+    for (const timer of Object.values(cursorTimersRef.current)) clearTimeout(timer);
+    cursorTimersRef.current = {};
     setLive(null);
     setLiveCursors({});
+    setLiveFollowers(new Set());
     setLivePanelOpen(false);
-    setFollowing(true);
+    setFollowing(false);
     const url = new URL(window.location.href);
     url.searchParams.delete('live');
     window.history.replaceState(null, '', url.pathname + url.search);
@@ -1022,6 +1027,7 @@ export default function App() {
           window.history.replaceState(null, '', url.pathname + url.search);
           liveRef.current = { room: joinRoom, self: { id: msg.id, name: msg.name, color: msg.color }, roster: msg.roster, hostId: msg.hostId };
           setLive(liveRef.current);
+          setLiveFollowers(new Set());
           if (msg.state) applyRemoteState(msg.state, true);
         } else if (msg.t === 'roster') {
           setLive((prev) => {
@@ -1030,14 +1036,22 @@ export default function App() {
             liveRef.current = next;
             return next;
           });
+          const stillHere = (id) => msg.roster.some((m) => m.id === id);
           setLiveCursors((prev) => {
             const next = { ...prev };
             let changed = false;
             for (const id of Object.keys(next)) {
-              if (!msg.roster.some((m) => m.id === id)) { delete next[id]; changed = true; }
+              if (!stillHere(id)) { delete next[id]; changed = true; }
             }
             return changed ? next : prev;
           });
+          setLiveFollowers((prev) => {
+            const next = new Set([...prev].filter(stillHere));
+            return next.size === prev.size ? prev : next;
+          });
+          for (const [id, timer] of Object.entries(cursorTimersRef.current)) {
+            if (!stillHere(id)) { clearTimeout(timer); delete cursorTimersRef.current[id]; }
+          }
         } else if (msg.t === 'state') {
           const session = liveRef.current;
           if (!session || msg.from === session.self.id) return;
@@ -1048,12 +1062,32 @@ export default function App() {
           }
           applyRemoteState(msg, fromHost);
         } else if (msg.t === 'cursor') {
-          setLiveCursors((prev) => ({ ...prev, [msg.from]: { wx: msg.wx, wy: msg.wy } }));
+          // Each move refreshes the name tag; after ~2 s of stillness it fades.
+          setLiveCursors((prev) => ({ ...prev, [msg.from]: { wx: msg.wx, wy: msg.wy, idle: false } }));
+          clearTimeout(cursorTimersRef.current[msg.from]);
+          cursorTimersRef.current[msg.from] = setTimeout(() => {
+            setLiveCursors((prev) => (
+              prev[msg.from] && !prev[msg.from].idle
+                ? { ...prev, [msg.from]: { ...prev[msg.from], idle: true } }
+                : prev
+            ));
+          }, 2000);
         } else if (msg.t === 'cursor-clear') {
+          clearTimeout(cursorTimersRef.current[msg.from]);
+          delete cursorTimersRef.current[msg.from];
           setLiveCursors((prev) => {
             if (!(msg.from in prev)) return prev;
             const next = { ...prev };
             delete next[msg.from];
+            return next;
+          });
+        } else if (msg.t === 'follow') {
+          // A guest announces (or retracts) that they're following the presenter.
+          const session = liveRef.current;
+          if (!session || msg.from === session.self.id) return;
+          setLiveFollowers((prev) => {
+            const next = new Set(prev);
+            if (msg.on) next.add(msg.from); else next.delete(msg.from);
             return next;
           });
         }
@@ -1066,17 +1100,22 @@ export default function App() {
     joinLive(generateRoomCode());
   }, [joinLive]);
 
-  const pauseFollowing = useCallback(() => {
-    if (!liveRef.current || !followRef.current) return;
-    followRef.current = false;
-    setFollowing(false);
-    notify('Following paused — press Follow to rejoin the presenter');
-  }, [notify]);
-
-  const resumeFollowing = useCallback(() => {
-    followRef.current = true;
-    setFollowing(true);
-    if (lastHostCameraRef.current) setCamera(lastHostCameraRef.current);
+  // Follow-the-presenter is an explicit guest choice: panning or zooming never
+  // changes it, only the Follow toggle does. Toggling on jumps to the host's
+  // current view; the host hears about it via 'follow' messages for the
+  // "N guests following" counter.
+  const toggleFollowing = useCallback(() => {
+    if (!liveRef.current) return;
+    if (followRef.current) {
+      followRef.current = false;
+      setFollowing(false);
+      liveConnRef.current?.send({ t: 'follow', on: false });
+    } else {
+      followRef.current = true;
+      setFollowing(true);
+      liveConnRef.current?.send({ t: 'follow', on: true });
+      if (lastHostCameraRef.current) setCamera(lastHostCameraRef.current);
+    }
   }, []);
 
   // Join a session from a shared link (?live=<room>).
@@ -1220,7 +1259,6 @@ export default function App() {
     }
     if (event.button === 1 || event.button === 2 || tool === 'hand' || spacePressed) {
       markHint('panned');
-      pauseFollowing();
       interaction.current = { type: 'pan', start: screen, camera };
       setCursor('grabbing');
       return;
@@ -2077,7 +2115,7 @@ export default function App() {
         return (
           <div key={id} className="remote-cursor" style={{ left: point.wx * camera.zoom + camera.x, top: point.wy * camera.zoom + camera.y, '--live': member.color }} aria-hidden="true">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M5 3l14 7-6.5 1.5L9 18 5 3z" /></svg>
-            <span className="remote-cursor-name">{member.name}</span>
+            <span className={`remote-cursor-name${point.idle ? ' idle' : ''}`}>{member.name}</span>
           </div>
         );
       })}
@@ -2117,7 +2155,9 @@ export default function App() {
               <li key={m.id}>
                 <span className="live-swatch" style={{ '--live': m.color }} />
                 <span className="live-name">{m.name}{m.id === live.self.id ? ' (you)' : ''}</span>
-                {m.id === live.hostId && <Crown size={13} className="live-host" aria-label="Host" />}
+                {m.id === live.hostId
+                  ? <span className="live-role live-host"><Crown size={11} />host</span>
+                  : <span className="live-role">guest</span>}
               </li>
             ))}
           </ul>
@@ -2125,10 +2165,15 @@ export default function App() {
         </section>
       )}
 
-      {live && !sharedView && !following && (
-        <button className="follow-chip" onClick={resumeFollowing}>
-          <MousePointer2 size={13} />
-          Follow {live.roster.find((m) => m.id === live.hostId)?.name || 'presenter'}
+      {live && !sharedView && live.self.id !== live.hostId && (
+        <button
+          className={`follow-chip${following ? ' following' : ''}`}
+          onClick={toggleFollowing}
+          aria-pressed={following}
+          title={following ? 'Stop following the presenter and explore freely' : `Follow ${live.roster.find((m) => m.id === live.hostId)?.name || 'the presenter'} — stay in sync with their view`}
+        >
+          {following ? <Check size={13} /> : <MousePointer2 size={13} />}
+          {following ? 'Following' : `Follow ${live.roster.find((m) => m.id === live.hostId)?.name || 'presenter'}`}
         </button>
       )}
 
@@ -2613,7 +2658,7 @@ export default function App() {
               <div className="shortcuts">
                 {[['Select', 'V'], ['Lasso select', 'S'], ['Pan canvas', 'H, Space or right-drag'], ['Rectangle / Diamond', 'R / D'], ['Ellipse / Arrow', 'O / A'], ['Draw / Text', 'P / T'], ['Frame', 'F'], ['Find frame / jump to', '⌘ F'], ['Erase', 'E'], ['Perfect shape', 'Hold still, then release'], ['Bold / Italic', '⌘ B / ⌘ I'], ['Align left / center / right', '⇧ ⌘ L / C / R'], ['Group / Ungroup', '⌘ G / ⇧ ⌘ G'], ['Undo / Redo', '⌘ Z / ⇧ ⌘ Z'], ['Duplicate', '⌘ D'], ['Select all', '⌘ A'], ['Delete selection', 'Delete'], ['Zoom at cursor', 'Scroll'], ['Zoom in / out', '+ / −'], ['Zoom to fit', '⇧ 1'], ['Pan sideways', '⇧ Scroll'], ['Nudge selection', 'Arrow keys'], ['Sticky note', 'Double-click canvas'], ['Finish text', '⌘ Enter'], ['Zen mode', 'Z']].map(([label, key]) => <div key={label}><span>{label}</span><kbd>{key}</kbd></div>)}
               </div>
-              <p className="help-tip"><strong>Little tips:</strong> scroll to zoom toward your cursor, drag with the middle or right mouse button (or hold <kbd>Space</kbd>) to pan, and double-click the overview map to fit everything. Press <kbd>F</kbd> and drag to draw a frame — a named region that carries whatever you put inside it when dragged; double-click its name to rename, and press <kbd>⌘ F</kbd> to jump between frames. Sticky notes can wear a status dot, carry tags, and collect voting dots for retrospectives — click a note's badge to vote, right-click to take one back. Draw frames around your topics and press Present for a clean full-screen walkthrough — frames glide from one to the next with a slide as you click or press the arrow keys, move the mouse to point with a laser, press <kbd>I</kbd> to scribble fading ink over the frame, <kbd>Esc</kbd> to leave. The floating bars each have a small grip you can drag to rearrange them — the Main menu can reset their positions. Press <kbd>Z</kbd> for zen mode, a clean desk with nothing but the canvas — each board remembers its own preference, and starting a presentation borrows zen for a clean first frame, handing your desk back when the show ends. <kbd>Z</kbd> or <kbd>Esc</kbd> brings everything back. In a live session, guests follow your view and can point back at the board with their own cursors while you present. Paste cells copied from Excel or Sheets — or drop a .csv / .xlsx file on the board — to draw a chart, then double-click the chart to edit its numbers. Drop a file onto an existing chart to refresh its data in place. For live working sessions, Share → Live session starts a room on your network — guests join the link and everyone's cursors, edits, and the presenter's camera stay in sync. Hold <kbd>Shift</kbd> while resizing to preserve proportions, or while selecting to choose multiple elements. Drag a box around elements to select them — a grouped element pulls its whole group along. Click a selected group again to edit one member on its own. Paste or drop images — screenshots, photos, logos — straight onto the board; they move, resize (proportions stay locked), and export with everything else. The lasso tool (<kbd>S</kbd>) loops around the elements you want — content joins by its center, a frame only when the whole frame is inside. Drawing a shape and holding the pointer still for a beat before releasing snaps it to a perfect square, circle, diamond, or 45° line. With the arrow tool, hovering a shape reveals four connector anchors — drag from one to another shape's anchor and the arrow stays glued to those points as the shapes move and resize. The Library panel keeps your own stencils too: select anything, give it a name, and insert it again whenever you need it — searchable, and saved on this device.</p>
+              <p className="help-tip"><strong>Little tips:</strong> scroll to zoom toward your cursor, drag with the middle or right mouse button (or hold <kbd>Space</kbd>) to pan, and double-click the overview map to fit everything. Press <kbd>F</kbd> and drag to draw a frame — a named region that carries whatever you put inside it when dragged; double-click its name to rename, and press <kbd>⌘ F</kbd> to jump between frames. Sticky notes can wear a status dot, carry tags, and collect voting dots for retrospectives — click a note's badge to vote, right-click to take one back. Draw frames around your topics and press Present for a clean full-screen walkthrough — frames glide from one to the next with a slide as you click or press the arrow keys, move the mouse to point with a laser, press <kbd>I</kbd> to scribble fading ink over the frame, <kbd>Esc</kbd> to leave. The floating bars each have a small grip you can drag to rearrange them — the Main menu can reset their positions. Press <kbd>Z</kbd> for zen mode, a clean desk with nothing but the canvas — each board remembers its own preference, and starting a presentation borrows zen for a clean first frame, handing your desk back when the show ends. <kbd>Z</kbd> or <kbd>Esc</kbd> brings everything back. In a live session, the who's-here island in the corner lists everyone by name and role; guests can follow your view with the Follow chip and point back at the board with their own cursors while you present. Paste cells copied from Excel or Sheets — or drop a .csv / .xlsx file on the board — to draw a chart, then double-click the chart to edit its numbers. Drop a file onto an existing chart to refresh its data in place. For live working sessions, Share → Live session starts a room on your network — guests join the link and everyone's cursors, edits, and the presenter's camera stay in sync. Hold <kbd>Shift</kbd> while resizing to preserve proportions, or while selecting to choose multiple elements. Drag a box around elements to select them — a grouped element pulls its whole group along. Click a selected group again to edit one member on its own. Paste or drop images — screenshots, photos, logos — straight onto the board; they move, resize (proportions stay locked), and export with everything else. The lasso tool (<kbd>S</kbd>) loops around the elements you want — content joins by its center, a frame only when the whole frame is inside. Drawing a shape and holding the pointer still for a beat before releasing snaps it to a perfect square, circle, diamond, or 45° line. With the arrow tool, hovering a shape reveals four connector anchors — drag from one to another shape's anchor and the arrow stays glued to those points as the shapes move and resize. The Library panel keeps your own stencils too: select anything, give it a name, and insert it again whenever you need it — searchable, and saved on this device.</p>
               <a className="github-link" href="https://github.com/kaspersebastian83-dot/sketchboard" target="_blank" rel="noreferrer"><Github size={15} />Star Sketchboard on GitHub</a>
             </>}
             {modal === 'rename' && <>
@@ -2800,6 +2845,9 @@ export default function App() {
               <strong>{framesSorted[presentIndex]?.name || 'Frame'}</strong>
               <span>{presentIndex + 1} of {framesSorted.length}</span>
             </div>
+            {live && liveFollowers.size > 0 && (
+              <span className="presentation-followers" title="Guests currently following your view"><Users size={12} />{liveFollowers.size} following</span>
+            )}
             <button className="plain-icon" aria-label="Next frame" title="Next frame" onClick={() => stepPresentation(1)}><ChevronRight size={18} /></button>
             <button
               className={`plain-icon ink-button${inkMode ? ' active' : ''}`}

@@ -1110,9 +1110,10 @@ try {
   await page.screenshot({ path: path.join(root, 'tests', 'whiteboard.png') });
 
   // Live collaboration: a second browser joins the same room over the dev
-  // server's WebSocket relay — board edits, cursors, and the presenter's
-  // camera all sync; a guest who pans drops into free navigation and can
-  // re-follow with the Follow chip.
+  // server's WebSocket relay — board edits and cursors sync, both sides keep
+  // a live presence list with roles, cursor name tags fade when their owner
+  // idles, and following the presenter is an explicit toggle: off means the
+  // guest's camera stays put, on means it tracks the host's every move.
   const liveRoom = `smoke-${Date.now().toString(36)}`;
   const liveHost = await browser.newContext();
   const liveHostPage = await liveHost.newPage({ viewport: { width: 1440, height: 900 } });
@@ -1124,44 +1125,76 @@ try {
   await liveGuestPage.goto(`http://127.0.0.1:5173/?live=${liveRoom}`);
   await liveGuestPage.waitForFunction(() => window.__renderStats);
   await liveGuestPage.locator('.live-indicator').click();
-  // Both sides see a two-person roster with exactly one host.
-  await expect.poll(async () => liveGuestPage.locator('.live-roster li').count()).toBe(2);
-  expect(await liveGuestPage.locator('.live-roster .live-host').count()).toBe(1);
+  await liveHostPage.locator('.live-indicator').click();
+  // (a) Presence list: both pages see a two-person roster with exactly one
+  // host, one guest, and a non-empty name on every row.
+  for (const participant of [liveGuestPage, liveHostPage]) {
+    await expect.poll(async () => participant.locator('.live-roster li').count()).toBe(2);
+    expect(await participant.locator('.live-roster .live-host').count()).toBe(1);
+    const liveNames = await participant.locator('.live-roster .live-name').allTextContents();
+    expect(liveNames.filter((n) => n.trim().length > 0).length).toBe(2);
+    const liveRoles = await participant.locator('.live-roster .live-role').allTextContents();
+    expect(liveRoles.filter((r) => r.includes('host')).length).toBe(1);
+    expect(liveRoles.filter((r) => r.includes('guest')).length).toBe(1);
+  }
   // Edits sync: host draws a rectangle, guest receives it (via the relay,
   // into their own persisted scene).
   await liveHostPage.getByTestId('tool-rectangle').click();
   await drag(liveHostPage, 300, 300, 420, 390);
   await expect.poll(async () => (await scene(liveGuestPage)).some((el) => el.type === 'rectangle')).toBe(true);
-  // Cursors sync: host moves over the canvas, guest sees a named remote cursor.
+  // (c) Cursor name tag: host moves over the canvas, the guest sees a remote
+  // cursor whose name tag renders under the pointer with the host's name —
+  // no hover needed — then fades away after ~2 s of stillness and reappears
+  // on the next move.
   await liveHostPage.mouse.move(500, 500);
   await liveHostPage.mouse.move(620, 560, { steps: 6 });
   await expect.poll(async () => liveGuestPage.locator('.remote-cursor').count()).toBe(1);
-  await expect(liveGuestPage.locator('.remote-cursor-name')).not.toHaveText('');
-  // Camera follows the host…
+  const tagName = (await liveGuestPage.locator('.remote-cursor-name').innerText()).trim();
+  const rosterNames = await liveGuestPage.locator('.live-roster .live-name').allTextContents();
+  expect(rosterNames.some((n) => n.includes(tagName))).toBe(true);
+  const tagOpacity = () => liveGuestPage.locator('.remote-cursor-name').evaluate((el) => getComputedStyle(el).opacity);
+  await expect.poll(async () => (await tagOpacity()) === '1').toBe(true);
+  await liveGuestPage.waitForTimeout(2600);
+  expect(await tagOpacity()).toBe('0');
+  await liveHostPage.mouse.move(621, 561, { steps: 2 });
+  await expect.poll(async () => (await tagOpacity()) === '1').toBe(true);
+  // (b) Follow toggling: with follow off (the default), the host's zoom never
+  // moves the guest's camera…
   const liveGuestCamBefore = await liveGuestPage.evaluate(() => window.__camera);
   await liveHostPage.keyboard.press('=');
-  await expect.poll(async () => (await liveGuestPage.evaluate(() => window.__camera)).zoom).not.toBe(liveGuestCamBefore.zoom);
-  // …until the guest pans on their own wheel, which pauses following.
+  await liveGuestPage.waitForTimeout(600); // host broadcast is debounced
+  expect(Math.abs((await liveGuestPage.evaluate(() => window.__camera)).zoom - liveGuestCamBefore.zoom)).toBeLessThan(0.001);
+  // …the guest explores freely on their own wheel without being yanked back…
   await liveGuestPage.mouse.move(700, 450);
+  const guestZoomExplored = (await liveGuestPage.evaluate(() => window.__camera)).zoom;
   await liveGuestPage.mouse.wheel(0, -120);
-  await expect(liveGuestPage.locator('.follow-chip')).toBeVisible();
-  const liveGuestCamPaused = await liveGuestPage.evaluate(() => window.__camera);
+  await expect.poll(async () => (await liveGuestPage.evaluate(() => window.__camera)).zoom).not.toBe(guestZoomExplored);
+  const guestZoomFree = (await liveGuestPage.evaluate(() => window.__camera)).zoom;
   await liveHostPage.keyboard.press('-');
-  // Wait until the host's new camera has actually reached the guest (the
-  // host's broadcast is debounced), then confirm the paused guest stayed put.
-  await expect.poll(async () => {
-    const [last, live] = await Promise.all([
-      liveGuestPage.evaluate(() => window.__lastHostCamera),
-      liveHostPage.evaluate(() => window.__camera),
-    ]);
-    return last && Math.abs(last.zoom - live.zoom) < 0.001;
-  }).toBe(true);
-  expect(Math.abs((await liveGuestPage.evaluate(() => window.__camera)).zoom - liveGuestCamPaused.zoom)).toBeLessThan(0.001);
-  // The Follow chip jumps back to the presenter's view.
+  await liveGuestPage.waitForTimeout(600);
+  expect(Math.abs((await liveGuestPage.evaluate(() => window.__camera)).zoom - guestZoomFree)).toBeLessThan(0.001);
+  // …toggling Follow on jumps to the host's live view and tracks every move…
   await liveGuestPage.getByRole('button', { name: /Follow/ }).click();
-  await expect.poll(async () => Math.abs((await liveGuestPage.evaluate(() => window.__camera)).zoom - (await liveHostPage.evaluate(() => window.__camera)).zoom)).toBeLessThan(0.001);
-  // Audience lasers: while the host presents, a guest's cursor stays visible
-  // above the presentation overlay on the host's screen.
+  await expect(liveGuestPage.locator('.follow-chip')).toHaveAttribute('aria-pressed', 'true');
+  const zoomGap = async () => Math.abs(
+    (await liveGuestPage.evaluate(() => window.__camera)).zoom
+      - (await liveHostPage.evaluate(() => window.__camera)).zoom,
+  );
+  await expect.poll(zoomGap).toBeLessThan(0.001);
+  await liveHostPage.keyboard.press('=');
+  await expect.poll(zoomGap).toBeLessThan(0.001);
+  // …and toggling it off again detaches: the host's next zoom leaves the guest put.
+  await liveGuestPage.getByRole('button', { name: 'Following' }).click();
+  await expect(liveGuestPage.locator('.follow-chip')).toHaveAttribute('aria-pressed', 'false');
+  const guestZoomDetached = (await liveGuestPage.evaluate(() => window.__camera)).zoom;
+  await liveHostPage.keyboard.press('-');
+  await liveGuestPage.waitForTimeout(600);
+  expect(Math.abs((await liveGuestPage.evaluate(() => window.__camera)).zoom - guestZoomDetached)).toBeLessThan(0.001);
+  // Audience view: follow once more, then present — the host sees a live
+  // "N following" count, and a guest's cursor stays visible above the
+  // presentation overlay on the host's screen.
+  await liveGuestPage.getByRole('button', { name: /Follow/ }).click();
+  await expect.poll(zoomGap).toBeLessThan(0.001);
   await liveHostPage.getByTestId('tool-frame').click();
   await drag(liveHostPage, 300, 250, 620, 470);
   await liveHostPage.keyboard.press('f');
@@ -1169,6 +1202,7 @@ try {
   await liveGuestPage.waitForTimeout(500);
   await liveHostPage.getByRole('button', { name: 'Present' }).click();
   await expect(liveHostPage.locator('.presentation')).toBeVisible();
+  await expect(liveHostPage.locator('.presentation-followers')).toContainText('1 following');
   await liveGuestPage.mouse.move(400, 400);
   await liveGuestPage.mouse.move(500, 420, { steps: 5 });
   await expect(liveHostPage.locator('.remote-cursor')).toBeVisible();

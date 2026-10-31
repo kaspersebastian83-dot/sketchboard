@@ -7,6 +7,8 @@ import { WebSocketServer } from 'ws';
 //   roster  -> broadcast on join/leave: { roster, hostId }  (first member hosts)
 //   state   -> { elements, camera, ts } relayed to everyone else, last writer wins server-side
 //   cursor  -> { wx, wy } relayed to everyone else, ephemeral
+//   follow  -> { on } relayed to everyone else, lets the presenter count their audience
+//   cursor-clear -> relayed on demand and on disconnect
 // The server never inspects element data; it is a dumb, in-memory relay, so
 // boards stay as private as the machine serving the dev server.
 
