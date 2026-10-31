@@ -1364,7 +1364,10 @@ export default function App() {
     }
     setSelectedIds([]);
     const el = makeElement(tool, point.x, point.y);
-    if (tool === 'freedraw') el.points = [[0, 0]];
+    if (tool === 'freedraw') {
+      el.points = [[0, 0]];
+      el.pressures = [event.pressure || 0.5];
+    }
     if (tool === 'frame') el.name = `Frame ${before.filter((item) => item.type === 'frame').length + 1}`;
     updateElements([...before, el]);
     interaction.current = { type: 'create', before, id: el.id, start: point, tool, lastMove: performance.now() };
@@ -1475,7 +1478,7 @@ export default function App() {
           const nextPoint = [point.x - el.x, point.y - el.y];
           const last = el.points[el.points.length - 1];
           if (Math.hypot(nextPoint[0] - last[0], nextPoint[1] - last[1]) < 1.5 / camera.zoom) return el;
-          return { ...el, points: [...el.points, nextPoint] };
+          return { ...el, points: [...el.points, nextPoint], pressures: [...(el.pressures || []), event.pressure || 0.5] };
         }
         if (el.type === 'arrow') {
           const others = elementsRef.current.filter((item) => item.id !== el.id);

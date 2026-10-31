@@ -355,6 +355,12 @@ function shapeSpecs(el) {
     const points = el.points.map((p) => [p[0] + el.x, p[1] + el.y]);
     if (points.length === 1) return [{ method: 'circle', args: [points[0][0], points[0][1], el.strokeWidth * 1.5], opts: { ...opts, fill: el.stroke, fillStyle: 'solid' } }];
     const filled = el.background && el.background !== 'transparent';
+    // Pressure-varying strokes draw natively; the rough drawable carries
+    // just the fill (hachure and all) underneath.
+    if (hasPressureVariation(el)) {
+      if (!filled) return [];
+      return [{ method: 'curve', args: [points], opts: { ...opts, stroke: undefined, fill: el.background, fillStyle: el.fillStyle || 'solid', roughness: Math.min(el.roughness, 0.7) } }];
+    }
     return [{ method: 'curve', args: [points], opts: { ...opts, fill: filled ? el.background : undefined, fillStyle: el.fillStyle || 'solid', roughness: Math.min(el.roughness, 0.7) } }];
   }
   return [];
@@ -417,6 +423,51 @@ function dashOutline(el) {
     default:
       return null;
   }
+}
+
+// --- Pen pressure -----------------------------------------------------------
+// A freedraw stroke carries one pressure sample per point (0–1; a mouse
+// reports a constant 0.5, a stylus varies). Real variation switches the
+// stroke to a tapered native render — the rough curve can't vary its width —
+// while constant pressure keeps the classic hand-drawn look.
+
+function hasPressureVariation(el) {
+  if (el.type !== 'freedraw' || !el.pressures || el.pressures.length !== el.points.length) return false;
+  let min = Infinity;
+  let max = -Infinity;
+  for (const p of el.pressures) {
+    if (p < min) min = p;
+    if (p > max) max = p;
+  }
+  return el.pressures.length >= 2 && max - min > 0.08;
+}
+
+// Mouse pressure (0.5) maps to the stroke width the stroke would have had
+// anyway; stylus presses above that go wider, feather-light touches thinner.
+const pressureRadius = (el, index) => (el.strokeWidth / 2) * Math.min(1.6, Math.max(0.2, el.pressures[index] / 0.5));
+
+function drawPressureStroke(ctx, el) {
+  const pts = el.points.map((p) => [p[0] + el.x, p[1] + el.y]);
+  ctx.save();
+  ctx.strokeStyle = el.stroke;
+  ctx.fillStyle = el.stroke;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  if (pts.length === 1) {
+    ctx.beginPath();
+    ctx.arc(pts[0][0], pts[0][1], pressureRadius(el, 0), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
+  for (let i = 0; i < pts.length - 1; i += 1) {
+    ctx.beginPath();
+    ctx.lineWidth = pressureRadius(el, i) + pressureRadius(el, i + 1);
+    ctx.moveTo(pts[i][0], pts[i][1]);
+    ctx.lineTo(pts[i + 1][0], pts[i + 1][1]);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function drawDashedStroke(ctx, el) {
@@ -706,6 +757,9 @@ export function drawScene(canvas, elements, options) {
     else if (isDashed(sourceEl)) {
       for (const drawable of shapesFor(rc, sourceEl, background)) rc.draw(drawable);
       drawDashedStroke(ctx, themedElement(sourceEl, background));
+    } else if (hasPressureVariation(sourceEl)) {
+      for (const drawable of shapesFor(rc, sourceEl, background)) rc.draw(drawable);
+      drawPressureStroke(ctx, themedElement(sourceEl, background));
     } else for (const drawable of shapesFor(rc, sourceEl, background)) rc.draw(drawable);
     ctx.restore();
   }
@@ -813,6 +867,19 @@ function appendDashedStroke(item, el, ns) {
   }
 }
 
+function appendPressureStroke(item, el, ns) {
+  // SVG strokes have a single width, so a tapered stroke exports as stamped
+  // discs — one per point, radius following the pressure samples.
+  el.points.forEach((p, index) => {
+    const circle = document.createElementNS(ns, 'circle');
+    circle.setAttribute('cx', p[0] + el.x);
+    circle.setAttribute('cy', p[1] + el.y);
+    circle.setAttribute('r', pressureRadius(el, index));
+    circle.setAttribute('fill', el.stroke);
+    item.appendChild(circle);
+  });
+}
+
 export function exportSvg(elements, background = '#ffffff') {
   const b = sceneBounds(elements);
   const padding = 40;
@@ -902,6 +969,7 @@ export function exportSvg(elements, background = '#ffffff') {
     } else {
       makeShapes(rc, el).forEach((shape) => item.appendChild(shape));
       if (isDashed(el)) appendDashedStroke(item, el, ns);
+      else if (hasPressureVariation(el)) appendPressureStroke(item, el, ns);
     }
     group.appendChild(item);
   }

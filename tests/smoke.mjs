@@ -131,6 +131,12 @@ try {
   await page.mouse.up();
   await page.waitForTimeout(100);
   expect((await scene(page)).length).toBe(6);
+  // Freehand strokes record pen pressure per point; a mouse reports a
+  // constant, so this stroke keeps its classic look.
+  const inkStroke = (await scene(page)).find((el) => el.type === 'freedraw');
+  expect(inkStroke.points.length).toBeGreaterThan(4);
+  expect(inkStroke.pressures.length).toBe(inkStroke.points.length);
+  expect(Math.max(...inkStroke.pressures) - Math.min(...inkStroke.pressures)).toBeLessThan(0.01);
 
   await page.getByRole('button', { name: 'Library', exact: true }).click();
   await page.getByRole('button', { name: /Quick flow/ }).click();
@@ -1250,13 +1256,52 @@ try {
   await page.keyboard.press('Delete');
   await expect.poll(async () => (await scene(page)).find((el) => el.id === styledRect.id)).toBeUndefined();
 
+  // Pen pressure: a stroke seeded with varying pressure samples renders as
+  // a tapered native stroke, and SVG export stamps it as pressure-sized
+  // circles. Camera is still (−1600, −1000): screen = world − (1600, 1000).
+  await page.evaluate(() => {
+    const ws = JSON.parse(localStorage.getItem('sketchboard-workspace-v1'));
+    const points = [];
+    const pressures = [];
+    for (let i = 0; i <= 40; i += 1) {
+      points.push([i * 8, Math.sin(i / 5) * 30]);
+      pressures.push(0.15 + (i / 40) * 0.85);
+    }
+    const tapered = {
+      id: 'taper-1', type: 'freedraw', x: 1900, y: 1600, width: 320, height: 60,
+      points, pressures, stroke: '#9c36b5', background: 'transparent', fillStyle: 'hachure',
+      strokeWidth: 4, roughness: 1, opacity: 100,
+    };
+    localStorage.setItem('sketchboard-workspace-v1', JSON.stringify({
+      ...ws,
+      boards: ws.boards.map((b) => b.id === ws.activeBoardId ? { ...b, elements: [...b.elements, tapered] } : b),
+    }));
+  });
+  await page.reload();
+  await page.waitForFunction(() => window.__renderStats);
+  await page.getByRole('button', { name: 'Export', exact: true }).click();
+  const pressureSvgDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: /SVG vector/ }).click();
+  const pressureSvg = readFileSync(await (await pressureSvgDownload).path(), 'utf8');
+  expect(pressureSvg).toContain('<circle');
+  expect(pressureSvg).toContain('#9c36b5');
+  await page.getByLabel('Close dialog').click();
+  // Clean up the seeded stroke.
+  await page.evaluate(() => {
+    const ws = JSON.parse(localStorage.getItem('sketchboard-workspace-v1'));
+    localStorage.setItem('sketchboard-workspace-v1', JSON.stringify({
+      ...ws,
+      boards: ws.boards.map((b) => b.id === ws.activeBoardId ? { ...b, elements: b.elements.filter((el) => el.id !== 'taper-1') } : b),
+    }));
+  });
+
   const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true });
   await mobile.goto('http://127.0.0.1:5173');
   await mobile.screenshot({ path: path.join(root, 'tests', 'mobile.png') });
   expect(await mobile.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
   expect(errors).toEqual([]);
-  console.log('PASS: draw, move, duplicate, undo/redo, text, stickies, smart arrows, snap guides, infinite zoom, minimap, mouse navigation, gesture coach, paste-to-chart, images, file drop, lasso select, draw-and-hold, freehand, zoom, PNG/SVG/sketch export, theme, persistence, share, boards, migration, frames, sticky tags and votes, presentation mode, fading ink, movable panels, zen mode, live collaboration, dashed and dotted strokes, help, and mobile layout.');
+  console.log('PASS: draw, move, duplicate, undo/redo, text, stickies, smart arrows, snap guides, infinite zoom, minimap, mouse navigation, gesture coach, paste-to-chart, images, file drop, lasso select, draw-and-hold, freehand, zoom, PNG/SVG/sketch export, theme, persistence, share, boards, migration, frames, sticky tags and votes, presentation mode, fading ink, movable panels, zen mode, live collaboration, dashed and dotted strokes, pen pressure, help, and mobile layout.');
 } finally {
   if (browser) await browser.close();
   server.kill('SIGTERM');
