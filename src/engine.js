@@ -309,10 +309,15 @@ export function resizeElement(el, handle, point, keepAspect = false) {
   return { ...el, x: left, y: top, width: w, height: h };
 }
 
+// rough.js only draws solid strokes, so dashed/dotted elements hand their
+// outline to the geometric dash renderer below; the rough drawable carries
+// just the fill (if any).
+const isDashed = (el) => el.strokeStyle === 'dashed' || el.strokeStyle === 'dotted';
+
 function roughOptions(el) {
   return {
     seed: seedFromId(el.id),
-    stroke: el.stroke,
+    stroke: isDashed(el) ? undefined : el.stroke,
     strokeWidth: el.strokeWidth,
     roughness: el.roughness,
     bowing: el.roughness === 0 ? 0 : 1.4,
@@ -326,6 +331,7 @@ function roughOptions(el) {
 function shapeSpecs(el) {
   const opts = roughOptions(el);
   const { x, y, width: w, height: h } = el;
+  if (isDashed(el) && (!el.background || el.background === 'transparent')) return [];
   if (el.type === 'rectangle') return [{ method: 'rectangle', args: [x, y, w, h], opts: { ...opts, preserveVertices: false } }];
   if (el.type === 'ellipse') return [{ method: 'ellipse', args: [x + w / 2, y + h / 2, Math.abs(w), Math.abs(h)], opts }];
   if (el.type === 'diamond') {
@@ -356,6 +362,100 @@ function shapeSpecs(el) {
 
 function makeShapes(rc, el) {
   return shapeSpecs(el).map((spec) => rc[spec.method](...spec.args, spec.opts));
+}
+
+// --- Dashed & dotted strokes -----------------------------------------------
+// The plain geometric outline a non-solid stroke follows. Fills still come
+// from the rough drawable; the dash pattern lives in world units so it scales
+// with the canvas zoom like every other stroke.
+
+function dashPattern(el) {
+  return el.strokeStyle === 'dotted'
+    ? [0.01, el.strokeWidth * 2.5]
+    : [el.strokeWidth * 4, el.strokeWidth * 3.5];
+}
+
+function dashSvgPattern(el) {
+  return el.strokeStyle === 'dotted'
+    ? `0.1 ${el.strokeWidth * 2.5}`
+    : `${el.strokeWidth * 4} ${el.strokeWidth * 3.5}`;
+}
+
+// The arrowhead geometry mirrors shapeSpecs: two wings from the tip. The
+// dashed shaft stops at the head's base so the head can stay solid.
+function dashArrowHead(el) {
+  const { x, y, width: w, height: h } = el;
+  const endX = x + w;
+  const endY = y + h;
+  const angle = Math.atan2(h, w);
+  const headLength = Math.min(28, Math.max(12, Math.hypot(w, h) / 4));
+  return {
+    base: [endX - Math.cos(angle) * headLength, endY - Math.sin(angle) * headLength],
+    left: [endX - headLength * Math.cos(angle - Math.PI / 6), endY - headLength * Math.sin(angle - Math.PI / 6)],
+    right: [endX - headLength * Math.cos(angle + Math.PI / 6), endY - headLength * Math.sin(angle + Math.PI / 6)],
+  };
+}
+
+function dashOutline(el) {
+  const { x, y, width: w, height: h } = el;
+  switch (el.type) {
+    case 'rectangle':
+      return { kind: 'polygon', points: [[x, y], [x + w, y], [x + w, y + h], [x, y + h]] };
+    case 'diamond':
+      return { kind: 'polygon', points: [[x + w / 2, y], [x + w, y + h / 2], [x + w / 2, y + h], [x, y + h / 2]] };
+    case 'ellipse':
+      return { kind: 'ellipse', cx: x + w / 2, cy: y + h / 2, rx: Math.abs(w) / 2, ry: Math.abs(h) / 2 };
+    case 'line':
+      return { kind: 'polyline', points: [[x, y], [x + w, y + h]] };
+    case 'arrow': {
+      const head = dashArrowHead(el);
+      return { kind: 'arrow', shaft: [[x, y], head.base], head };
+    }
+    case 'freedraw':
+      if (el.points.length < 2) return { kind: 'dot', x: el.x + el.points[0][0], y: el.y + el.points[0][1] };
+      return { kind: 'polyline', points: el.points.map((p) => [p[0] + el.x, p[1] + el.y]) };
+    default:
+      return null;
+  }
+}
+
+function drawDashedStroke(ctx, el) {
+  const outline = dashOutline(el);
+  if (!outline) return;
+  ctx.save();
+  ctx.strokeStyle = el.stroke;
+  ctx.fillStyle = el.stroke;
+  ctx.lineWidth = el.strokeWidth;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  if (outline.kind === 'dot') {
+    ctx.beginPath();
+    ctx.arc(outline.x, outline.y, el.strokeWidth * 1.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
+  ctx.setLineDash(dashPattern(el));
+  ctx.beginPath();
+  if (outline.kind === 'ellipse') ctx.ellipse(outline.cx, outline.cy, outline.rx, outline.ry, 0, 0, Math.PI * 2);
+  else {
+    const points = outline.kind === 'arrow' ? outline.shaft : outline.points;
+    points.forEach(([px, py], index) => (index === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)));
+    if (outline.kind === 'polygon') ctx.closePath();
+  }
+  ctx.stroke();
+  if (outline.kind === 'arrow') {
+    // The head stays solid so the arrow still reads as an arrow.
+    ctx.setLineDash([]);
+    const { x, y, width: w, height: h } = el;
+    ctx.beginPath();
+    ctx.moveTo(x + w, y + h);
+    ctx.lineTo(outline.head.left[0], outline.head.left[1]);
+    ctx.moveTo(x + w, y + h);
+    ctx.lineTo(outline.head.right[0], outline.head.right[1]);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 // Canvas drawables are cached per element identity: regenerating rough.js
@@ -603,7 +703,10 @@ export function drawScene(canvas, elements, options) {
     ctx.globalAlpha = sourceEl.opacity / 100;
     if (sourceEl.type === 'image') drawImageElement(ctx, sourceEl);
     else if (sourceEl.type === 'text') drawText(ctx, themedElement(sourceEl, background));
-    else for (const drawable of shapesFor(rc, sourceEl, background)) rc.draw(drawable);
+    else if (isDashed(sourceEl)) {
+      for (const drawable of shapesFor(rc, sourceEl, background)) rc.draw(drawable);
+      drawDashedStroke(ctx, themedElement(sourceEl, background));
+    } else for (const drawable of shapesFor(rc, sourceEl, background)) rc.draw(drawable);
     ctx.restore();
   }
   // Sticky-note extras ride on top of the note itself: status dot, vote badge,
@@ -666,6 +769,48 @@ export async function exportPng(elements, background = '#ffffff') {
     background,
   });
   return new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+}
+
+function appendDashedStroke(item, el, ns) {
+  const outline = dashOutline(el);
+  if (!outline) return;
+  if (outline.kind === 'dot') {
+    const dot = document.createElementNS(ns, 'circle');
+    dot.setAttribute('cx', outline.x);
+    dot.setAttribute('cy', outline.y);
+    dot.setAttribute('r', el.strokeWidth * 1.5);
+    dot.setAttribute('fill', el.stroke);
+    item.appendChild(dot);
+    return;
+  }
+  const paint = (node, d, dash) => {
+    if (d) node.setAttribute('d', d);
+    node.setAttribute('fill', 'none');
+    node.setAttribute('stroke', el.stroke);
+    node.setAttribute('stroke-width', el.strokeWidth);
+    node.setAttribute('stroke-linecap', 'round');
+    node.setAttribute('stroke-linejoin', 'round');
+    if (dash) node.setAttribute('stroke-dasharray', dashSvgPattern(el));
+    item.appendChild(node);
+  };
+  if (outline.kind === 'ellipse') {
+    const node = document.createElementNS(ns, 'ellipse');
+    node.setAttribute('cx', outline.cx);
+    node.setAttribute('cy', outline.cy);
+    node.setAttribute('rx', outline.rx);
+    node.setAttribute('ry', outline.ry);
+    paint(node, null, true);
+    return;
+  }
+  const points = outline.kind === 'arrow' ? outline.shaft : outline.points;
+  const d = points.map(([px, py], index) => `${index === 0 ? 'M' : 'L'}${px} ${py}`).join(' ')
+    + (outline.kind === 'polygon' ? ' Z' : '');
+  paint(document.createElementNS(ns, 'path'), d, true);
+  if (outline.kind === 'arrow') {
+    const { x, y, width: w, height: h } = el;
+    const headD = `M${x + w} ${y + h} L${outline.head.left[0]} ${outline.head.left[1]} M${x + w} ${y + h} L${outline.head.right[0]} ${outline.head.right[1]}`;
+    paint(document.createElementNS(ns, 'path'), headD, false);
+  }
 }
 
 export function exportSvg(elements, background = '#ffffff') {
@@ -756,6 +901,7 @@ export function exportSvg(elements, background = '#ffffff') {
       item.appendChild(node);
     } else {
       makeShapes(rc, el).forEach((shape) => item.appendChild(shape));
+      if (isDashed(el)) appendDashedStroke(item, el, ns);
     }
     group.appendChild(item);
   }

@@ -6,7 +6,7 @@ A hand-drawn whiteboard in the browser — an Excalidraw-style infinite canvas w
 
 - **Hand-drawn engine** — rough.js strokes, hachure fills, Virgil handwriting font
 - **Infinite canvas** — zoom without limits, pan with mouse or trackpad
-- **Shapes & tools** — rectangle, diamond, ellipse, arrow (with smart endpoint binding), line, freedraw, text, eraser
+- **Shapes & tools** — rectangle, diamond, ellipse, arrow (with smart endpoint binding), line, freedraw, text, eraser; strokes can be solid, dashed, or dotted
 - **Sticky notes** — status dots, tags, and voting dots for retrospectives
 - **Frames** — named regions; drag to carry their contents; `⌘F` to jump between them
 - **Presentation mode** — full-screen frame walkthrough with slide transitions, laser pointer, and fading ink annotations (`I`)

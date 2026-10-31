@@ -24,7 +24,7 @@ import { parseTableText, buildChartElements } from './charts.js';
 import { tablesFromSpreadsheet } from './import.js';
 
 const DEFAULT_STYLE = {
-  stroke: '#1e1e1e', background: 'transparent', fillStyle: 'hachure',
+  stroke: '#1e1e1e', background: 'transparent', fillStyle: 'hachure', strokeStyle: 'solid',
   strokeWidth: 2, roughness: 1, opacity: 100, fontSize: 24, textAlign: 'left', fontWeight: 400, fontStyle: 'normal', lineHeight: 1.25,
 };
 const TOOLS = [
@@ -2420,6 +2420,13 @@ export default function App() {
             <div className="property-row"><span>Fill</span><div className="segmented three"><button className={currentStyle.fillStyle === 'hachure' ? 'selected' : ''} onClick={() => applyStyle('fillStyle', 'hachure')} title="Hachure"><span className="fill-icon hachure" /></button><button className={currentStyle.fillStyle === 'cross-hatch' ? 'selected' : ''} onClick={() => applyStyle('fillStyle', 'cross-hatch')} title="Cross-hatch"><span className="fill-icon cross" /></button><button className={currentStyle.fillStyle === 'solid' ? 'selected' : ''} onClick={() => applyStyle('fillStyle', 'solid')} title="Solid"><span className="fill-icon solid" /></button></div></div>
           )}
           {!singleImage && <div className="property-row"><span>Stroke width</span><div className="segmented three">{[1, 2, 4].map((width) => <button key={width} className={currentStyle.strokeWidth === width ? 'selected' : ''} onClick={() => applyStyle('strokeWidth', width)} aria-label={`Stroke width ${width}`}><span className={`stroke-sample width-${width}`} /></button>)}</div></div>}
+          {!['text', 'image'].includes(tool) && !['text', 'image'].includes(selectedElements[0]?.type) && (
+            <div className="property-row"><span>Stroke style</span><div className="segmented three">{[
+              { value: 'solid', label: 'Solid' },
+              { value: 'dashed', label: 'Dashed' },
+              { value: 'dotted', label: 'Dotted' },
+            ].map(({ value, label }) => <button key={value} className={(currentStyle.strokeStyle || 'solid') === value ? 'selected' : ''} onClick={() => applyStyle('strokeStyle', value)} aria-label={`Stroke style ${label}`} title={label}><svg viewBox="0 0 28 12"><line x1="2" y1="6" x2="26" y2="6" className={`stroke-line ${value}`} /></svg></button>)}</div></div>
+          )}
           {!singleImage && <div className="property-row"><span>Roughness</span><div className="segmented three">{[0, 1, 2].map((roughness) => <button key={roughness} className={currentStyle.roughness === roughness ? 'selected' : ''} onClick={() => applyStyle('roughness', roughness)} aria-label={`Roughness ${roughness}`}><svg viewBox="0 0 28 20"><path className={`rough-${roughness}`} d={roughness === 0 ? 'M3 16 L25 4' : roughness === 1 ? 'M3 15 Q13 1 25 5' : 'M3 14 Q8 3 14 8 T25 3'} /></svg></button>)}</div></div>}
           {singleImage && (
             <div className="property-row"><span>Image</span><div className="image-info" title={selectedElements[0].name}>{selectedElements[0].name} · {Math.round(selectedElements[0].width)} × {Math.round(selectedElements[0].height)}</div></div>

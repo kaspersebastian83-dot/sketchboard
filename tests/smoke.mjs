@@ -1,5 +1,6 @@
 import { chromium, expect } from '@playwright/test';
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import XLSX from 'xlsx';
@@ -1210,13 +1211,52 @@ try {
   await liveGuestPage.close();
   await liveHost.close();
 
+  // Stroke styles: dashed and dotted outlines apply to a shape, survive a
+  // reload, and export to SVG with a dash array. Teleport to an empty
+  // region; screen = world − (1600, 1000).
+  await page.evaluate(() => {
+    const ws = JSON.parse(localStorage.getItem('sketchboard-workspace-v1'));
+    localStorage.setItem('sketchboard-workspace-v1', JSON.stringify({
+      ...ws,
+      boards: ws.boards.map((b) => b.id === ws.activeBoardId ? { ...b, camera: { x: -1600, y: -1000, zoom: 1 } } : b),
+    }));
+  });
+  await page.reload();
+  await page.waitForFunction(() => window.__renderStats);
+  await page.getByTestId('tool-rectangle').click();
+  await drag(page, 300, 200, 500, 420); // world (1900,1200) → (2100,1420)
+  const styledRect = (await scene(page)).at(-1);
+  await expect.poll(() => page.evaluate(() => window.__selectedIds ?? [])).toEqual([styledRect.id]);
+  await page.getByRole('button', { name: 'Stroke style Dashed' }).click();
+  await expect.poll(async () => (await scene(page)).find((el) => el.id === styledRect.id).strokeStyle).toBe('dashed');
+  await page.getByRole('button', { name: 'Stroke style Dotted' }).click();
+  await expect.poll(async () => (await scene(page)).find((el) => el.id === styledRect.id).strokeStyle).toBe('dotted');
+  await page.getByRole('button', { name: 'Stroke style Dashed' }).click();
+  await expect.poll(async () => (await scene(page)).find((el) => el.id === styledRect.id).strokeStyle).toBe('dashed');
+  // The style rides the saved element through a reload.
+  await page.reload();
+  await page.waitForFunction(() => window.__renderStats);
+  expect((await scene(page)).find((el) => el.id === styledRect.id).strokeStyle).toBe('dashed');
+  // SVG export carries the dash pattern.
+  await page.mouse.click(400, 310); // the rect's center at the restored camera
+  await expect.poll(() => page.evaluate(() => window.__selectedIds ?? [])).toEqual([styledRect.id]);
+  await page.getByRole('button', { name: 'Export', exact: true }).click();
+  const dashSvgDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: /SVG vector/ }).click();
+  const dashSvg = readFileSync(await (await dashSvgDownload).path(), 'utf8');
+  expect(dashSvg).toContain('stroke-dasharray');
+  await page.getByLabel('Close dialog').click();
+  // Clean up the scratch shape so the board stays as the earlier tests left it.
+  await page.keyboard.press('Delete');
+  await expect.poll(async () => (await scene(page)).find((el) => el.id === styledRect.id)).toBeUndefined();
+
   const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true });
   await mobile.goto('http://127.0.0.1:5173');
   await mobile.screenshot({ path: path.join(root, 'tests', 'mobile.png') });
   expect(await mobile.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
   expect(errors).toEqual([]);
-  console.log('PASS: draw, move, duplicate, undo/redo, text, stickies, smart arrows, snap guides, infinite zoom, minimap, mouse navigation, gesture coach, paste-to-chart, images, file drop, lasso select, draw-and-hold, freehand, zoom, PNG/SVG/sketch export, theme, persistence, share, boards, migration, frames, sticky tags and votes, presentation mode, fading ink, movable panels, zen mode, live collaboration, help, and mobile layout.');
+  console.log('PASS: draw, move, duplicate, undo/redo, text, stickies, smart arrows, snap guides, infinite zoom, minimap, mouse navigation, gesture coach, paste-to-chart, images, file drop, lasso select, draw-and-hold, freehand, zoom, PNG/SVG/sketch export, theme, persistence, share, boards, migration, frames, sticky tags and votes, presentation mode, fading ink, movable panels, zen mode, live collaboration, dashed and dotted strokes, help, and mobile layout.');
 } finally {
   if (browser) await browser.close();
   server.kill('SIGTERM');
