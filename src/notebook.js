@@ -118,3 +118,49 @@ export function pageToDataUrl(elements, paper, scale = 1, pixelRatio = 2) {
   paintPage(canvas, elements, { scale, pixelRatio, paper });
   return canvas.toDataURL('image/png');
 }
+
+// --- Backup ---------------------------------------------------------------------
+// A plain JSON file with every notebook, so pages can be kept safe or moved
+// between devices and browsers.
+
+const BACKUP_APP = 'sketchboard-notebooks';
+
+export function serializeBackup(state) {
+  return JSON.stringify({ app: BACKUP_APP, version: 1, exportedAt: new Date().toISOString(), notebooks: state.notebooks }, null, 1);
+}
+
+const validPage = (p) => p && typeof p.id === 'string' && Array.isArray(p.elements);
+
+export function parseBackup(text) {
+  let raw;
+  try { raw = JSON.parse(text); } catch { throw new Error('That file is not a notebook backup.'); }
+  if (raw?.app !== BACKUP_APP || !Array.isArray(raw.notebooks)) throw new Error('That file is not a notebook backup.');
+  const notebooks = raw.notebooks
+    .filter((n) => n && typeof n.id === 'string' && Array.isArray(n.pages) && n.pages.length && n.pages.every(validPage))
+    .map((n) => ({
+      id: n.id,
+      name: String(n.name || 'Notebook').slice(0, 80),
+      paper: PAPERS.some((paper) => paper.id === n.paper) ? n.paper : 'grid',
+      pages: n.pages.map((p) => ({ id: p.id, elements: p.elements })),
+      current: Math.min(Math.max(0, n.current || 0), n.pages.length - 1),
+      createdAt: n.createdAt || Date.now(),
+      updatedAt: n.updatedAt || Date.now(),
+    }));
+  if (!notebooks.length) throw new Error('No notebooks found in that file.');
+  return notebooks;
+}
+
+// Adds imported notebooks next to the existing ones. A notebook that is already
+// here unchanged is skipped; one that was edited since gets imported as a copy
+// so nothing on this device is ever overwritten.
+export function mergeNotebooks(existing, incoming) {
+  const added = [];
+  let skipped = 0;
+  for (const nb of incoming) {
+    const same = existing.find((e) => e.id === nb.id);
+    if (!same) { added.push(nb); continue; }
+    if (JSON.stringify(same.pages) === JSON.stringify(nb.pages) && same.name === nb.name) { skipped += 1; continue; }
+    added.push({ ...nb, id: `nb-${uid()}`, name: `${nb.name} (imported)` });
+  }
+  return { notebooks: [...existing, ...added], added: added.length, skipped };
+}

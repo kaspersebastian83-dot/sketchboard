@@ -105,6 +105,28 @@ try {
   await expect(page.getByTestId('nb-page-count')).toHaveText('1 / 1');
   expect((await read()).notebooks[0].pages[0].elements.length).toBe(2);
 
+  // Backup: download everything, then restore an edited copy of one notebook.
+  await page.getByTestId('nb-notebooks').click();
+  const [download] = await Promise.all([page.waitForEvent('download'), page.getByTestId('nb-backup').click()]);
+  const backup = JSON.parse(await (await import('node:fs/promises')).readFile(await download.path(), 'utf8'));
+  expect(backup.app).toBe('sketchboard-notebooks');
+  expect(backup.notebooks.length).toBe(2);
+  // Same backup again: nothing new, nothing duplicated.
+  await page.getByTestId('nb-restore-input').setInputFiles({ name: 'same.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(backup)) });
+  await expect(page.getByRole('status')).toHaveText('Nothing new in that backup');
+  expect((await read()).notebooks.length).toBe(2);
+  // An edited copy comes in as a separate notebook; existing ones are never overwritten.
+  backup.notebooks[0].pages[0].elements = [];
+  await page.getByTestId('nb-restore-input').setInputFiles({ name: 'edited.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(backup)) });
+  await expect.poll(async () => (await read()).notebooks.length).toBe(3);
+  expect((await read()).notebooks[0].pages[0].elements.length).toBe(2);
+  expect((await read()).notebooks[2].name).toContain('(imported)');
+  // Garbage is rejected with a message.
+  await page.getByTestId('nb-restore-input').setInputFiles({ name: 'bad.json', mimeType: 'application/json', buffer: Buffer.from('{"hello":1}') });
+  await expect(page.getByRole('status')).toHaveText('That file is not a notebook backup.');
+  expect((await read()).notebooks.length).toBe(3);
+  await page.keyboard.press('Escape');
+
   // Back to the whiteboard.
   await page.getByTestId('nb-exit').click();
   await expect(page.getByTestId('tool-rectangle')).toBeVisible();

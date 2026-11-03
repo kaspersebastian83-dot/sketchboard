@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft, BookOpen, Check, ChevronLeft, ChevronRight, Download, Eraser, FilePlus2, Grid3X3,
-  Highlighter, Pencil, Plus, Redo2, Scissors, Trash2, Type, Undo2, X,
+  Highlighter, Pencil, Plus, Redo2, Scissors, Trash2, Type, Undo2, Upload, X,
 } from 'lucide-react';
 import { uid, hitTest } from './engine.js';
 import {
   PAGE_W, PAGE_H, GRID, PAPERS, loadNotebooks, saveNotebooks, newNotebook, newPage, paintPage, pageToDataUrl,
+  serializeBackup, parseBackup, mergeNotebooks,
 } from './notebook.js';
 
 const INKS = [
@@ -286,6 +287,28 @@ export default function Notebook({ onExit }) {
   };
   const renameNotebook = (name) => patchNotebook(nb.id, (n) => ({ ...n, name: name.trim() || n.name }));
 
+  const backupInput = useRef(null);
+  const backupAll = () => {
+    const blob = new Blob([serializeBackup(stateRef.current)], { type: 'application/json' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `sketchboard-notebooks-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    showToast('Backup saved');
+  };
+  const restoreFrom = async (file) => {
+    if (!file) return;
+    try {
+      const incoming = parseBackup(await file.text());
+      const merged = mergeNotebooks(stateRef.current.notebooks, incoming);
+      setState((s) => ({ ...s, notebooks: mergeNotebooks(s.notebooks, incoming).notebooks }));
+      showToast(merged.added ? `Restored ${merged.added} ${merged.added === 1 ? 'notebook' : 'notebooks'}` : 'Nothing new in that backup');
+    } catch (error) {
+      showToast(error.message || 'Could not read that file');
+    }
+  };
+
   const downloadPage = () => {
     const link = document.createElement('a');
     link.href = pageToDataUrl(page.elements, nb.paper, 3, 2);
@@ -425,6 +448,11 @@ export default function Notebook({ onExit }) {
             </div>
           ))}
           <button className="nb-book new" onClick={createNotebook} data-testid="nb-new-notebook"><Plus size={16} /><span>New notebook</span></button>
+          <div className="nb-backup">
+            <button onClick={backupAll} data-testid="nb-backup"><Download size={15} /><span>Back up all</span></button>
+            <button onClick={() => backupInput.current?.click()} data-testid="nb-restore"><Upload size={15} /><span>Restore…</span></button>
+            <input ref={backupInput} type="file" accept="application/json,.json" hidden data-testid="nb-restore-input" onChange={(event) => { restoreFrom(event.target.files?.[0]); event.target.value = ''; }} />
+          </div>
         </div>
       )}
 
