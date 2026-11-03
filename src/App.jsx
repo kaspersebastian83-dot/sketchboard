@@ -8,7 +8,7 @@ import {
   Group, Ungroup, AlignStartVertical, AlignCenterVertical, AlignEndVertical,
   AlignStartHorizontal, AlignCenterHorizontal, AlignEndHorizontal, Link2, LayoutGrid,
   Mouse, Magnet, FileUp, Frame, Play, ChevronLeft, ChevronRight, Radio, Crown, LogOut, Users,
-  GripVertical, Eye, Github, ImagePlus, LassoSelect,
+  GripVertical, Eye, Github, ImagePlus, LassoSelect, BookOpen,
 } from 'lucide-react';
 import {
   collabAvailable, generateName, generateRoomCode, liveRoomFromUrl, liveJoinUrl, connectCollab,
@@ -118,7 +118,7 @@ function loadIslandPositions() {
   return {};
 }
 
-export default function App() {
+export default function App({ onOpenNotebook }) {
   const sharedInitial = typeof window !== 'undefined' && window.__sharedScene ? window.__sharedScene : null;
   const initialWorkspace = useRef(loadWorkspace()).current;
   const activeBoard = initialWorkspace.boards.find((b) => b.id === initialWorkspace.activeBoardId) || initialWorkspace.boards[0];
@@ -2219,6 +2219,7 @@ export default function App() {
             <button onClick={() => { saveJson(); setMenuOpen(false); }}><Download size={17} /><span>Save to file</span></button>
             <button onClick={() => { setModal('export'); setMenuOpen(false); }}><ImageIcon size={17} /><span>Export image…</span><kbd>⇧⌘E</kbd></button>
             <div className="menu-separator" />
+            {onOpenNotebook && !sharedView && <button onClick={() => { setMenuOpen(false); onOpenNotebook(); }} data-testid="open-notebook"><BookOpen size={17} /><span>Pocket notebook</span></button>}
             <button onClick={() => { setGrid(!grid); }}><Grid3X3 size={17} /><span>Canvas grid</span>{grid && <Check size={15} />}</button>
             <button onClick={() => { setTheme(theme === 'dark' ? 'light' : 'dark'); }}>{theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}<span>{theme === 'dark' ? 'Light' : 'Dark'} mode</span><kbd>⇧⌘D</kbd></button>
             <button onClick={() => { setModal('help'); setMenuOpen(false); }}><Keyboard size={17} /><span>Keyboard shortcuts</span><kbd>?</kbd></button>
