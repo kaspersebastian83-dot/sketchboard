@@ -64,6 +64,7 @@ try {
   await context.setOffline(true);
   await page.reload();
   await expect(page.getByTestId('notebook')).toBeVisible();
+  await page.getByTestId('nb-more').click();
   await page.getByTestId('nb-exit').click();
   await expect(page.getByTestId('tool-rectangle')).toBeVisible();
   await page.getByLabel('Main menu').click();

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
-  ArrowLeft, BookOpen, Check, ChevronLeft, ChevronRight, Download, Eraser, FilePlus2, Grid3X3,
-  Highlighter, Pencil, Plus, Redo2, Scissors, Trash2, Type, Undo2, Upload, X,
+  BookOpen, ChevronDown, ChevronLeft, ChevronRight, Download, Eraser, FilePlus2, Highlighter,
+  LayoutGrid, MoreHorizontal, Pencil, PenLine, Plus, Redo2, Scissors, Trash2, Type, Undo2, Upload,
 } from 'lucide-react';
 import { uid, hitTest } from './engine.js';
 import {
@@ -94,8 +94,12 @@ function NotebookView({ initialState, onExit }) {
   const editorRef = useRef(null);
   const [flip, setFlip] = useState(null); // { dir, src, target }
   const flipRef = useRef(false);
-  const [panel, setPanel] = useState(null); // 'notebooks' | 'paper' | 'tear' | null
+  const [panel, setPanel] = useState(null); // 'notebooks' | 'menu' | 'options' | null
+  const [confirmTear, setConfirmTear] = useState(false);
   const [renaming, setRenaming] = useState(false);
+  const [keyboardShift, setKeyboardShift] = useState(0);
+  const keyboardShiftRef = useRef(0);
+  keyboardShiftRef.current = keyboardShift;
   const [toast, setToast] = useState('');
   const [size, setSize] = useState({ w: window.innerWidth, h: window.innerHeight });
   const [fontsEpoch, setFontsEpoch] = useState(0);
@@ -103,15 +107,27 @@ function NotebookView({ initialState, onExit }) {
 
   const canvasRef = useRef(null);
   const drawRef = useRef(null);
-  const penSeen = useRef(false);
   const histRef = useRef(new Map());
   const toastTimer = useRef(null);
 
   // --- Layout ------------------------------------------------------------------
-  const narrow = size.w < 720;
-  const availW = size.w - (narrow ? 36 : 80);
-  const availH = size.h - (narrow ? 196 : 168);
-  const scale = clamp(Math.min(availW / PAGE_W, availH / PAGE_H), 0.45, 2.2);
+  // Phones get the page nearly edge to edge; the desk and cover are for screens
+  // with room to spare. The top bar and toolbar are measured, not guessed, so
+  // safe areas never squeeze the page.
+  const compact = size.w < 720;
+  const headerRef = useRef(null);
+  const footerRef = useRef(null);
+  const [chrome, setChrome] = useState(compact ? 112 : 128);
+  useLayoutEffect(() => {
+    const measure = () => setChrome((headerRef.current?.offsetHeight || 0) + (footerRef.current?.offsetHeight || 0));
+    measure();
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null;
+    if (observer) { if (headerRef.current) observer.observe(headerRef.current); if (footerRef.current) observer.observe(footerRef.current); }
+    return () => observer?.disconnect();
+  }, [compact]);
+  const availW = size.w - (compact ? 20 : 96);
+  const availH = size.h - chrome - (compact ? 22 : 44);
+  const scale = clamp(Math.min(availW / PAGE_W, availH / PAGE_H), 0.4, 2.2);
   const W = Math.floor(PAGE_W * scale);
   const H = Math.floor(PAGE_H * scale);
   const dpr = Math.min(3, window.devicePixelRatio || 1);
@@ -253,6 +269,23 @@ function NotebookView({ initialState, onExit }) {
     }
   };
   const cancelText = () => { editorRef.current = null; setEditor(null); };
+  // On a phone the keyboard covers the lower half of the page: slide the pad up
+  // just enough to keep the text being typed in view.
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!editor || !vv) { setKeyboardShift(0); return undefined; }
+    const adjust = () => {
+      const el = editorInput.current;
+      if (!el) return;
+      const visibleBottom = vv.offsetTop + vv.height - 12;
+      const bottom = el.getBoundingClientRect().bottom + keyboardShiftRef.current;
+      setKeyboardShift(Math.max(0, bottom - visibleBottom));
+    };
+    adjust();
+    vv.addEventListener('resize', adjust);
+    vv.addEventListener('scroll', adjust);
+    return () => { vv.removeEventListener('resize', adjust); vv.removeEventListener('scroll', adjust); };
+  }, [editor?.id, editor?.y]);
   const editorInput = useRef(null);
   useEffect(() => {
     const el = editorInput.current;
@@ -377,9 +410,8 @@ function NotebookView({ initialState, onExit }) {
   };
   const onPointerDown = (event) => {
     if (flipRef.current || event.button > 0) return;
-    if (event.pointerType === 'pen') penSeen.current = true;
-    if (event.pointerType === 'touch' && penSeen.current) return; // palm rejection once a stylus has been used
     setPanel(null);
+    setConfirmTear(false);
     if (editorRef.current) commitText();
     const p = worldPoint(event);
     if (tool === 'text') {
@@ -443,8 +475,8 @@ function NotebookView({ initialState, onExit }) {
   // Swipe up for the next page, down for the previous one: the page lifts over the
   // spiral under your fingers, and letting go early drops it back. One finger
   // draws, so a flip starts with two fingers on the paper, one finger on the desk
-  // or spiral around it, or any finger once a stylus has been used (then fingers
-  // no longer draw). A stylus always writes. Wheel and trackpad scrolling flip too.
+  // or spiral around it. A stylus always writes, and fingers are ignored while a
+  // stylus is writing (resting palm). Wheel and trackpad scrolling flip too.
   const pointersRef = useRef(new Map()); // pointers down on the desk -> { x, y, type }
   const swipeRef = useRef(null);
   const flipElRef = useRef(null);
@@ -560,7 +592,7 @@ function NotebookView({ initialState, onExit }) {
     }
     if (event.button > 0) return;
     const onPaper = event.target === canvasRef.current;
-    if (!onPaper || (event.pointerType === 'touch' && penSeen.current)) {
+    if (!onPaper) {
       startSwipe([event.pointerId], event);
       event.stopPropagation();
     }
@@ -639,6 +671,7 @@ function NotebookView({ initialState, onExit }) {
     if (tag === 'INPUT' || tag === 'TEXTAREA') return;
     const mod = event.metaKey || event.ctrlKey;
     if (mod && event.key.toLowerCase() === 'z') { event.preventDefault(); if (event.shiftKey) redo(); else undo(); return; }
+    if (event.key === 'Escape') { setPanel(null); setConfirmTear(false); setRenaming(false); return; }
     if (mod) return;
     if (event.key === 'ArrowRight' || event.key === 'PageDown') { event.preventDefault(); goTo(nb.current + 1); return; }
     if (event.key === 'ArrowLeft' || event.key === 'PageUp') { event.preventDefault(); goTo(nb.current - 1); return; }
@@ -655,24 +688,49 @@ function NotebookView({ initialState, onExit }) {
   const activeColor = tool === 'highlighter' ? marker : ink;
   const setColor = (color) => (tool === 'highlighter' ? setMarker(color) : setInk(color));
   const lastPage = nb.current === nb.pages.length - 1;
+  const multiple = nb.pages.length > 1;
+  const togglePanel = (name) => {
+    if (name === 'menu' && panel !== 'menu') refreshStorage();
+    setConfirmTear(false);
+    setPanel(panel === name ? null : name);
+  };
+  // Tap a tool to use it; tap the tool you are already using to see its options.
+  const pickTool = (id) => {
+    commitText();
+    if (tool === id && id !== 'eraser') { setPanel(panel === 'options' ? null : 'options'); return; }
+    setTool(id);
+    setPanel(null);
+  };
+  const setPaper = (paper) => patchNotebook(nb.id, (n) => ({ ...n, paper }));
 
   return (
-    <div className="nb-app" data-testid="notebook">
-      <header className="nb-top">
-        <button className="nb-chip" onClick={() => { commitText(); onExit(); }} data-testid="nb-exit"><ArrowLeft size={16} /><span>Whiteboard</span></button>
+    <div className={`nb-app ${compact ? 'compact' : ''}`} data-testid="notebook">
+      <header className="nb-top" ref={headerRef}>
         {renaming ? (
           <input
             className="nb-title-input"
             aria-label="Notebook name"
             defaultValue={nb.name}
             autoFocus
+            onFocus={(event) => event.target.select()}
             onBlur={(event) => { renameNotebook(event.target.value); setRenaming(false); }}
             onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') setRenaming(false); }}
           />
         ) : (
-          <button className="nb-title" onClick={() => setRenaming(true)} title="Rename notebook" data-testid="nb-title">{nb.name}</button>
+          <button className={`nb-chip nb-book-chip ${panel === 'notebooks' ? 'on' : ''}`} onClick={() => togglePanel('notebooks')} aria-expanded={panel === 'notebooks'} title="Notebooks" data-testid="nb-notebooks">
+            <BookOpen size={17} />
+            <span className="nb-book-chip-name" data-testid="nb-title">{nb.name}</span>
+            <ChevronDown size={14} className="nb-chip-caret" />
+          </button>
         )}
-        <button className={`nb-chip ${panel === 'notebooks' ? 'on' : ''}`} onClick={() => { if (panel !== 'notebooks') refreshStorage(); setPanel(panel === 'notebooks' ? null : 'notebooks'); }} data-testid="nb-notebooks"><BookOpen size={16} /><span>Notebooks</span></button>
+        <div className="nb-pager" data-testid="nb-pager">
+          <button className="nb-icon" aria-label="Previous page" title="Previous page (←)" data-testid="nb-prev" disabled={nb.current === 0} onClick={() => goTo(nb.current - 1)}><ChevronLeft size={19} /></button>
+          <span className="nb-pager-count" data-testid="nb-page-count">{nb.current + 1} / {nb.pages.length}</span>
+          <button className="nb-icon" aria-label="Next page" title="Next page (→)" data-testid="nb-next" disabled={lastPage} onClick={() => goTo(nb.current + 1)}><ChevronRight size={19} /></button>
+        </div>
+        <button className={`nb-chip nb-more ${panel === 'menu' ? 'on' : ''}`} aria-label="More" aria-expanded={panel === 'menu'} title="More" data-testid="nb-more" onClick={() => togglePanel('menu')}>
+          <MoreHorizontal size={19} />
+        </button>
       </header>
 
       {panel === 'notebooks' && (
@@ -690,11 +748,34 @@ function NotebookView({ initialState, onExit }) {
             </div>
           ))}
           <button className="nb-book new" onClick={createNotebook} data-testid="nb-new-notebook"><Plus size={16} /><span>New notebook</span></button>
-          <div className="nb-backup">
-            <button onClick={backupAll} data-testid="nb-backup"><Download size={15} /><span>Back up all</span></button>
-            <button onClick={() => backupInput.current?.click()} data-testid="nb-restore"><Upload size={15} /><span>Restore…</span></button>
-            <input ref={backupInput} type="file" accept="application/json,.json" hidden data-testid="nb-restore-input" onChange={(event) => { restoreFrom(event.target.files?.[0]); event.target.value = ''; }} />
+        </div>
+      )}
+
+      {panel === 'menu' && (
+        <div className="nb-panel nb-menu" data-testid="nb-menu">
+          <div className="nb-menu-section">Paper</div>
+          <div className="nb-segmented" role="radiogroup" aria-label="Paper style" data-testid="nb-paper">
+            {PAPERS.map((paper) => (
+              <button key={paper.id} role="radio" aria-checked={nb.paper === paper.id} className={nb.paper === paper.id ? 'on' : ''} data-testid={`nb-paper-${paper.id}`} onClick={() => setPaper(paper.id)}>{paper.label}</button>
+            ))}
           </div>
+          <div className="nb-menu-section">This page</div>
+          <button className="nb-menu-item" onClick={() => { downloadPage(); setPanel(null); }} data-testid="nb-download"><Download size={17} /><span>Save page as image</span></button>
+          {confirmTear ? (
+            <div className="nb-menu-item nb-confirm" data-testid="nb-tear-confirm">
+              <Scissors size={17} />
+              <span>{multiple ? 'Tear off this page?' : 'Clear this page?'}</span>
+              <button onClick={() => setConfirmTear(false)}>Keep</button>
+              <button className="danger" onClick={() => { setConfirmTear(false); tearOff(); }} data-testid="nb-tear-yes">{multiple ? 'Tear off' : 'Clear'}</button>
+            </div>
+          ) : (
+            <button className="nb-menu-item" onClick={() => setConfirmTear(true)} data-testid="nb-tear"><Scissors size={17} /><span>{multiple ? 'Tear off page' : 'Clear page'}</span></button>
+          )}
+          <div className="nb-menu-section">Notebook</div>
+          <button className="nb-menu-item" onClick={() => { setPanel(null); setRenaming(true); }} data-testid="nb-rename"><PenLine size={17} /><span>Rename notebook</span></button>
+          <button className="nb-menu-item" onClick={() => { backupAll(); setPanel(null); }} data-testid="nb-backup"><Download size={17} /><span>Back up all notebooks</span></button>
+          <button className="nb-menu-item" onClick={() => backupInput.current?.click()} data-testid="nb-restore"><Upload size={17} /><span>Restore from backup…</span></button>
+          <input ref={backupInput} type="file" accept="application/json,.json" hidden data-testid="nb-restore-input" onChange={(event) => { restoreFrom(event.target.files?.[0]); event.target.value = ''; }} />
           {storage && (
             <div className="nb-storage" data-testid="nb-storage">
               <span className={`nb-storage-dot ${storage.persisted ? 'ok' : ''}`} />
@@ -707,6 +788,8 @@ function NotebookView({ initialState, onExit }) {
               {!storage.persisted && <button onClick={protectStorage} data-testid="nb-protect">Protect</button>}
             </div>
           )}
+          <div className="nb-menu-divider" />
+          <button className="nb-menu-item" onClick={() => { commitText(); onExit(); }} data-testid="nb-exit"><LayoutGrid size={17} /><span>Open whiteboard</span></button>
         </div>
       )}
 
@@ -718,8 +801,10 @@ function NotebookView({ initialState, onExit }) {
         onPointerUpCapture={onDeskPointerUpCapture}
         onPointerCancelCapture={onDeskPointerUpCapture}
         onWheel={onWheel}
+        style={keyboardShift ? { transform: `translateY(-${keyboardShift}px)` } : undefined}
       >
-        {/* Perspective scales with the page: a fixed depth makes a large page balloon as it lifts. */}
+        {/* Perspective scales with the page: a fixed depth makes a large page balloon as it lifts.
+            While typing on a phone the desk slides up so the text stays above the keyboard. */}
         <div className="nb-pad" ref={padRef} style={{ width: W, height: H, perspective: `${Math.round(H * 4)}px` }}>
           <div className="nb-cover" aria-hidden="true" />
           <div className="nb-stage" style={{ width: W, height: H }}>
@@ -771,7 +856,6 @@ function NotebookView({ initialState, onExit }) {
             )}
           </div>
           <Spiral scale={scale} width={W} />
-          <div className="nb-count" data-testid="nb-page-count">{nb.current + 1} / {nb.pages.length}</div>
         </div>
       </main>
 
@@ -784,61 +868,51 @@ function NotebookView({ initialState, onExit }) {
         </div>
       )}
 
-      <footer className="nb-toolbar" data-testid="nb-toolbar">
-        <div className="nb-group">
-          {TOOLS.map(({ id, icon: Icon, label, key }) => (
-            <button key={id} className={`nb-icon ${tool === id ? 'on' : ''}`} aria-label={label} aria-pressed={tool === id} title={`${label} (${key})`} data-testid={`nb-tool-${id}`} onClick={() => { commitText(); setTool(id); }}>
-              <Icon size={19} />
-            </button>
-          ))}
-        </div>
-        {/* Hidden rather than removed, so the toolbar never changes size and the page never jumps. */}
-        <div className="nb-group" style={tool === 'eraser' ? { visibility: 'hidden' } : undefined} aria-hidden={tool === 'eraser'}>
-          {colors.map(({ color, label }) => (
-            <button key={color} className={`nb-swatch ${activeColor === color ? 'on' : ''}`} style={{ background: color }} aria-label={label} aria-pressed={activeColor === color} tabIndex={tool === 'eraser' ? -1 : 0} onClick={() => setColor(color)} />
-          ))}
-        </div>
-        <div className="nb-group" style={tool === 'pen' ? undefined : { visibility: 'hidden' }} aria-hidden={tool !== 'pen'}>
-          {WIDTHS.map((item) => (
-            <button key={item.id} className={`nb-icon ${width === item.width ? 'on' : ''}`} aria-label={`${item.label} stroke`} aria-pressed={width === item.width} tabIndex={tool === 'pen' ? 0 : -1} onClick={() => setWidth(item.width)}>
-              <span className="nb-dot" style={{ width: item.width * 2 + 3, height: item.width * 2 + 3 }} />
-            </button>
-          ))}
-        </div>
-        <div className="nb-group">
-          <button className="nb-icon" aria-label="Undo" title="Undo" disabled={!hist.past.length} onClick={undo}><Undo2 size={18} /></button>
-          <button className="nb-icon" aria-label="Redo" title="Redo" disabled={!hist.future.length} onClick={redo}><Redo2 size={18} /></button>
-        </div>
-        <div className="nb-group">
-          <button className="nb-icon" aria-label="Previous page" title="Previous page (←)" data-testid="nb-prev" disabled={nb.current === 0} onClick={() => goTo(nb.current - 1)}><ChevronLeft size={19} /></button>
-          <button className="nb-icon" aria-label="Next page" title="Next page (→)" data-testid="nb-next" disabled={lastPage} onClick={() => goTo(nb.current + 1)}><ChevronRight size={19} /></button>
-          <button className="nb-icon" aria-label="New page" title="New page" data-testid="nb-add" onClick={addPage}><FilePlus2 size={18} /></button>
-        </div>
-        <div className="nb-group">
-          <div className="nb-menu-anchor">
-            <button className={`nb-icon ${panel === 'paper' ? 'on' : ''}`} aria-label="Paper style" title="Paper style" data-testid="nb-paper" onClick={() => setPanel(panel === 'paper' ? null : 'paper')}><Grid3X3 size={18} /></button>
-            {panel === 'paper' && (
-              <div className="nb-popover" data-testid="nb-paper-menu">
-                {PAPERS.map((paper) => (
-                  <button key={paper.id} className={nb.paper === paper.id ? 'on' : ''} data-testid={`nb-paper-${paper.id}`} onClick={() => { patchNotebook(nb.id, (n) => ({ ...n, paper: paper.id })); setPanel(null); }}>
-                    <span>{paper.label}</span>{nb.paper === paper.id && <Check size={14} />}
+      <footer className="nb-bottom" ref={footerRef}>
+        {panel === 'options' && tool !== 'eraser' && (
+          <div className="nb-options" data-testid="nb-options" role="group" aria-label={`${TOOLS.find((t) => t.id === tool).label} options`}>
+            <div className="nb-options-row">
+              {colors.map(({ color, label }) => (
+                <button key={color} className={`nb-swatch ${activeColor === color ? 'on' : ''}`} style={{ background: color }} aria-label={label} aria-pressed={activeColor === color} onClick={() => setColor(color)} />
+              ))}
+            </div>
+            {tool === 'pen' && (
+              <div className="nb-options-row">
+                {WIDTHS.map((item) => (
+                  <button key={item.id} className={`nb-icon ${width === item.width ? 'on' : ''}`} aria-label={`${item.label} stroke`} aria-pressed={width === item.width} onClick={() => setWidth(item.width)}>
+                    <span className="nb-dot" style={{ width: item.width * 2 + 4, height: item.width * 2 + 4 }} />
                   </button>
                 ))}
               </div>
             )}
           </div>
-          <button className="nb-icon" aria-label="Save page as PNG" title="Save page as PNG" onClick={downloadPage}><Download size={18} /></button>
-          <div className="nb-menu-anchor">
-            <button className={`nb-icon ${panel === 'tear' ? 'on' : ''}`} aria-label={nb.pages.length === 1 ? 'Clear page' : 'Tear off page'} title={nb.pages.length === 1 ? 'Clear page' : 'Tear off page'} data-testid="nb-tear" onClick={() => setPanel(panel === 'tear' ? null : 'tear')}><Scissors size={18} /></button>
-            {panel === 'tear' && (
-              <div className="nb-popover nb-confirm" data-testid="nb-tear-confirm">
-                <span>{nb.pages.length === 1 ? 'Clear this page?' : 'Tear off this page?'}</span>
-                <div>
-                  <button onClick={() => setPanel(null)} aria-label="Keep page"><X size={14} /></button>
-                  <button className="danger" onClick={tearOff} data-testid="nb-tear-yes" aria-label="Confirm"><Check size={14} /></button>
-                </div>
-              </div>
-            )}
+        )}
+        <div className="nb-toolbar" data-testid="nb-toolbar">
+          <div className="nb-group">
+            {TOOLS.map(({ id, icon: Icon, label, key }) => {
+              const dot = id === 'pen' || id === 'text' ? ink : id === 'highlighter' ? marker : null;
+              return (
+                <button
+                  key={id}
+                  className={`nb-icon nb-tool ${tool === id ? 'on' : ''} ${tool === id && panel === 'options' ? 'open' : ''}`}
+                  aria-label={label}
+                  aria-pressed={tool === id}
+                  title={tool === id && id !== 'eraser' ? `${label} options` : `${label} (${key})`}
+                  data-testid={`nb-tool-${id}`}
+                  onClick={() => pickTool(id)}
+                >
+                  <Icon size={20} />
+                  {dot && <span className="nb-tool-dot" style={{ background: dot }} />}
+                </button>
+              );
+            })}
+          </div>
+          <div className="nb-group">
+            <button className="nb-icon" aria-label="Undo" title="Undo (⌘Z)" disabled={!hist.past.length} onClick={undo}><Undo2 size={19} /></button>
+            <button className="nb-icon" aria-label="Redo" title="Redo (⇧⌘Z)" disabled={!hist.future.length} onClick={redo}><Redo2 size={19} /></button>
+          </div>
+          <div className="nb-group">
+            <button className="nb-icon nb-add" aria-label="New page" title="New page" data-testid="nb-add" onClick={addPage}><FilePlus2 size={19} /></button>
           </div>
         </div>
       </footer>

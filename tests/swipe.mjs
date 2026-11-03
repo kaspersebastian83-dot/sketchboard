@@ -128,25 +128,33 @@ try {
   await settled();
   await expect(count).toHaveText('1 / 3');
 
-  // Once a stylus has been used, one finger anywhere flips (fingers stop drawing)…
+  // A stylus writes; a finger that lands while the hand is still resting from
+  // writing is ignored (palm rejection) — it neither draws nor flips. Fingers
+  // always draw again afterwards: using a stylus never silently changes what a
+  // finger does.
   const pen = (type, x, y) => cdp.send('Input.dispatchMouseEvent', { type, x, y, button: 'left', buttons: type === 'mouseReleased' ? 0 : 1, clickCount: 1, pointerType: 'pen' });
   await pen('mousePressed', cx - 60, box.y + 120);
   for (let i = 1; i <= 8; i += 1) await pen('mouseMoved', cx - 60 + i * 12, box.y + 120 + i * 3);
   await pen('mouseReleased', cx + 36, box.y + 144);
   await expect.poll(() => elementsOn(0)).toBe(2);
-  // …but not while the hand is still resting from writing (palm rejection).
   await swipe([[cx, low]], -300, { steps: 6 });
   await settled();
   await expect(count).toHaveText('1 / 3');
+  expect(await elementsOn(0)).toBe(2);
   await page.waitForTimeout(700);
   await swipe([[cx, low]], -300);
   await settled();
+  await expect(count).toHaveText('1 / 3');
+  await expect.poll(() => elementsOn(0)).toBe(3);
+  // Two fingers still turn the page.
+  await swipe([[cx - 40, low], [cx + 40, low]], -300);
+  await settled();
   await expect(count).toHaveText('2 / 3');
-  expect(await elementsOn(0)).toBe(2);
+  expect(await elementsOn(0)).toBe(3);
   expect(await elementsOn(1)).toBe(0);
 
   expect(errors).toEqual([]);
-  console.log('PASS: swipe up/down flips pages (two fingers, desk, stylus mode, mouse, wheel); drawing, nudges, edges and palms are handled.');
+  console.log('PASS: swipe up/down flips pages (two fingers, desk, mouse, wheel); drawing, nudges, edges and palms are handled.');
 } finally {
   await browser.close();
   server.close();

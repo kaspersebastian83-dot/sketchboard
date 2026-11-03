@@ -60,6 +60,7 @@ try {
 
   // Start the real run from an empty store. Leaving for the whiteboard is
   // remembered, so the reload lands on the board.
+  await page.getByTestId('nb-more').click();
   await page.getByTestId('nb-exit').click();
   await expect(page.getByTestId('open-notebook-bar')).toBeVisible();
   // Wipe only from a fresh board page: the notebook's last save on exit could
@@ -86,7 +87,13 @@ try {
   const box = await canvas.boundingBox();
   expect(Math.abs(box.height / box.width - 592 / 420)).toBeLessThan(0.02); // A6 proportions
 
-  // Pen stroke.
+  // Pen options open by tapping the active tool again; the page must not move.
+  await page.getByTestId('nb-tool-pen').click();
+  await expect(page.getByTestId('nb-options')).toBeVisible();
+  expect(await canvas.boundingBox()).toEqual(box);
+  await page.getByRole('button', { name: 'Red', exact: true }).click();
+  await page.getByRole('button', { name: 'Bold stroke' }).click();
+  // Pen stroke (first touch on the page closes the options and draws).
   await page.mouse.move(box.x + 40, box.y + 80);
   await page.mouse.down();
   await page.mouse.move(box.x + 160, box.y + 120, { steps: 12 });
@@ -94,6 +101,8 @@ try {
   await page.mouse.up();
   await expect.poll(async () => (await read()).notebooks[0].pages[0].elements.length).toBe(1);
   expect((await read()).notebooks[0].pages[0].elements[0].type).toBe('freedraw');
+  expect((await read()).notebooks[0].pages[0].elements[0].stroke).toBe('#e03131');
+  await expect(page.getByTestId('nb-options')).toHaveCount(0);
 
   // Text.
   await page.getByTestId('nb-tool-text').click();
@@ -139,14 +148,15 @@ try {
   await expect(page.getByTestId('nb-page-count')).toHaveText('2 / 2');
   await expect(page.getByTestId('nb-flip')).toHaveCount(0);
 
-  // Paper style applies to the whole notebook.
-  await page.getByTestId('nb-paper').click();
+  // Paper style (in the ⋯ menu) applies to the whole notebook.
+  await page.getByTestId('nb-more').click();
   await page.getByTestId('nb-paper-dots').click();
   await expect.poll(async () => (await read()).notebooks[0].paper).toBe('dots');
 
   // Tear off page 2 (it was empty); back to a single page.
   await page.getByTestId('nb-tear').click();
   await page.getByTestId('nb-tear-yes').click();
+  await page.keyboard.press('Escape');
   await expect(page.getByTestId('nb-page-count')).toHaveText('1 / 1');
   await expect(page.getByTestId('nb-flip')).toHaveCount(0);
 
@@ -154,7 +164,8 @@ try {
   await page.getByTestId('nb-notebooks').click();
   await page.getByTestId('nb-new-notebook').click();
   await expect.poll(async () => (await read()).notebooks.length).toBe(2);
-  await page.getByTestId('nb-title').click();
+  await page.getByTestId('nb-more').click();
+  await page.getByTestId('nb-rename').click();
   await page.getByLabel('Notebook name').fill('Brandschaden Nord');
   await page.getByLabel('Notebook name').press('Enter');
   await expect.poll(async () => (await read()).notebooks[1].name).toBe('Brandschaden Nord');
@@ -166,10 +177,11 @@ try {
   await expect(page.getByTestId('nb-page-count')).toHaveText('1 / 1');
   expect((await read()).notebooks[0].pages[0].elements.length).toBe(2);
 
-  // Backup: download everything, then restore an edited copy of one notebook.
-  await page.getByTestId('nb-notebooks').click();
+  // Backup (⋯ menu): download everything, then restore an edited copy of one notebook.
+  await page.getByTestId('nb-more').click();
   await expect(page.getByTestId('nb-storage')).toContainText('Saved on this device');
   const [download] = await Promise.all([page.waitForEvent('download'), page.getByTestId('nb-backup').click()]);
+  await page.getByTestId('nb-more').click(); // the restore picker lives in the menu
   const backup = JSON.parse(await (await import('node:fs/promises')).readFile(await download.path(), 'utf8'));
   expect(backup.app).toBe('sketchboard-notebooks');
   expect(backup.notebooks.length).toBe(2);
@@ -189,7 +201,8 @@ try {
   expect((await read()).notebooks.length).toBe(3);
   await page.keyboard.press('Escape');
 
-  // Back to the whiteboard; the choice sticks across reloads.
+  // Back to the whiteboard (⋯ menu); the choice sticks across reloads.
+  await page.getByTestId('nb-more').click();
   await page.getByTestId('nb-exit').click();
   await expect(page.getByTestId('tool-rectangle')).toBeVisible();
   await page.reload();

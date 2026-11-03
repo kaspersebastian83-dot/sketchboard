@@ -653,6 +653,9 @@ kbd { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 }
 
 /* --- Notebook mode: an A6 top-spiral pocket pad ------------------------------- */
+/* Layout: a slim top bar (notebook · pager · more), the page, and a one-row
+   toolbar. Everything else lives in popovers. On phones the page runs nearly
+   edge to edge; the desk and cover only show when there is room for them. */
 .nb-app {
   --desk: #e7dccb;
   --desk-2: #ddd0bb;
@@ -662,6 +665,7 @@ kbd { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
   --chrome-muted: #85796a;
   --chrome-hover: #f3e9d7;
   --chrome-on: #e8dcc3;
+  --accent: #8a5a2b;
   position: relative; width: 100%; height: 100%; overflow: hidden;
   display: flex; flex-direction: column; align-items: center;
   color: var(--chrome-ink); user-select: none;
@@ -670,29 +674,42 @@ kbd { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 @media (prefers-color-scheme: dark) {
   .nb-app {
     --desk: #3a332b; --desk-2: #29241f; --chrome: #38322b; --chrome-border: #4d453b;
-    --chrome-ink: #efe6d6; --chrome-muted: #b3a690; --chrome-hover: #453d33; --chrome-on: #594f41;
+    --chrome-ink: #efe6d6; --chrome-muted: #b3a690; --chrome-hover: #453d33; --chrome-on: #594f41; --accent: #e7c48a;
   }
 }
+
+/* Top bar */
 .nb-top {
-  position: relative; z-index: 20; width: 100%; max-width: 760px; padding: 10px 14px 0;
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  position: relative; z-index: 20; width: 100%; max-width: 920px; flex: none;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 8px;
+  padding: 10px 14px 0;
 }
+.nb-top > :last-child { justify-self: end; }
 .nb-chip {
-  display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; min-height: 38px;
+  display: inline-flex; align-items: center; gap: 6px; height: 40px; padding: 0 12px; min-width: 0;
   border: 1px solid var(--chrome-border); border-radius: 12px; background: var(--chrome); color: var(--chrome-ink);
   cursor: pointer; font-size: 14px; box-shadow: 0 1px 2px rgba(60, 40, 10, .08);
 }
 .nb-chip:hover, .nb-chip.on { background: var(--chrome-hover); }
-.nb-title, .nb-title-input {
-  flex: 1; min-width: 0; text-align: center; font-family: "Virgil", "Segoe Print", cursive; font-size: 19px;
-  color: var(--chrome-ink); background: transparent; border: 0; border-radius: 8px; padding: 6px 8px; cursor: text;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+.nb-chip.nb-more { width: 40px; padding: 0; justify-content: center; }
+.nb-book-chip { max-width: 100%; justify-self: start; }
+.nb-book-chip-name { font-family: "Virgil", "Segoe Print", cursive; font-size: 17px; line-height: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nb-chip-caret { flex: none; color: var(--chrome-muted); }
+.nb-title-input {
+  justify-self: start; width: 100%; max-width: 320px; height: 40px; padding: 0 12px;
+  font-family: "Virgil", "Segoe Print", cursive; font-size: 17px; color: var(--chrome-ink);
+  background: var(--chrome); border: 1px solid var(--chrome-border); border-radius: 12px; outline: 2px solid #6698ff; outline-offset: 1px;
 }
-.nb-title:hover { background: var(--chrome-hover); }
-.nb-title-input { background: var(--chrome); outline: 2px solid #6698ff; cursor: text; }
+.nb-pager {
+  display: inline-flex; align-items: center; height: 40px; padding: 0 2px;
+  border: 1px solid var(--chrome-border); border-radius: 12px; background: var(--chrome); box-shadow: 0 1px 2px rgba(60, 40, 10, .08);
+}
+.nb-pager .nb-icon { width: 36px; height: 36px; }
+.nb-pager-count { min-width: 56px; text-align: center; font-size: 13px; font-variant-numeric: tabular-nums; color: var(--chrome-ink); }
 
-.nb-desk { flex: 1; width: 100%; display: flex; align-items: center; justify-content: center; min-height: 0; padding-top: 14px; touch-action: none; overscroll-behavior: none; }
-.nb-pad { position: relative; perspective: 1700px; perspective-origin: 50% 0; }
+/* Page */
+.nb-desk { flex: 1; width: 100%; display: flex; align-items: center; justify-content: center; min-height: 0; padding: 10px 0; touch-action: none; overscroll-behavior: none; transition: transform .18s ease-out; }
+.nb-pad { position: relative; perspective-origin: 50% 0; }
 .nb-cover {
   position: absolute; inset: -12px -12px -22px -12px; border-radius: 8px 8px 12px 12px;
   background:
@@ -709,22 +726,18 @@ kbd { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 .nb-canvas { position: absolute; inset: 0; display: block; touch-action: none; cursor: crosshair; border-radius: inherit; }
 .nb-canvas.tool-text { cursor: text; }
 .nb-spiral { position: absolute; left: 0; top: -9px; z-index: 6; pointer-events: none; overflow: visible; filter: drop-shadow(0 1.5px 1.2px rgba(40, 25, 5, .35)); }
-.nb-count {
-  position: absolute; right: 8px; bottom: 6px; z-index: 6; padding: 2px 8px; border-radius: 999px; pointer-events: none;
-  font-size: 11px; color: #6c6250; background: rgba(251, 246, 232, .85); border: 1px solid rgba(120, 100, 60, .2);
-}
 .nb-text-editor {
   position: absolute; z-index: 4; margin: 0; padding: 0; resize: none; overflow: hidden; border: 0; border-radius: 2px;
   background: transparent; outline: 1.5px dashed rgba(102, 152, 255, .8); outline-offset: 2px;
   font-family: "Virgil", "Segoe Print", "Bradley Hand", cursive; line-height: 1.25; user-select: text;
 }
 
+/* Page flip */
 .nb-flip {
   position: absolute; inset: 0; z-index: 5; pointer-events: none; transform-origin: 50% 0; transform-style: preserve-3d;
   animation-duration: .62s; animation-timing-function: cubic-bezier(.45, .05, .35, 1); animation-fill-mode: forwards;
 }
 .nb-flip.next { animation-name: nb-flip-up; }
-/* Swipe-driven flip: the finger sets the angle; on release it settles with a transition. */
 .nb-flip.drag { animation: none; will-change: transform; }
 .nb-flip.drag.settling { transition: transform .3s cubic-bezier(.2, .7, .3, 1), opacity .3s ease-out; }
 .nb-flip.prev { animation-name: nb-flip-down; }
@@ -734,42 +747,46 @@ kbd { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 @keyframes nb-flip-down { 0% { transform: rotateX(180deg); opacity: 0; } 22% { transform: rotateX(140deg); opacity: 1; } 100% { transform: rotateX(0); opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .nb-flip { animation-duration: .01s; } }
 
+/* Toolbar: one row, fixed positions. Tool options open above it. */
+.nb-bottom { position: relative; z-index: 20; flex: none; width: 100%; display: flex; flex-direction: column; align-items: center; padding: 0 10px calc(12px + env(safe-area-inset-bottom)); }
 .nb-toolbar {
-  position: relative; z-index: 20; margin: 6px 10px calc(12px + env(safe-area-inset-bottom)); max-width: calc(100% - 20px);
-  display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 8px; padding: 8px 10px;
+  display: flex; align-items: center; gap: 10px; padding: 6px 8px;
   background: var(--chrome); border: 1px solid var(--chrome-border); border-radius: 16px; box-shadow: 0 6px 18px rgba(60, 40, 10, .18);
 }
-.nb-group { display: flex; align-items: center; gap: 2px; padding-right: 8px; border-right: 1px solid var(--chrome-border); }
+.nb-group { display: flex; align-items: center; gap: 2px; padding-right: 10px; border-right: 1px solid var(--chrome-border); }
 .nb-group:last-child { border-right: 0; padding-right: 0; }
 .nb-icon {
-  display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px;
-  border: 0; border-radius: 10px; background: transparent; color: var(--chrome-ink); cursor: pointer;
+  position: relative; display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px;
+  border: 0; border-radius: 12px; background: transparent; color: var(--chrome-ink); cursor: pointer;
 }
 .nb-icon.small { width: 30px; height: 30px; }
 .nb-icon:hover:not(:disabled) { background: var(--chrome-hover); }
 .nb-icon.on { background: var(--chrome-on); box-shadow: inset 0 0 0 1px var(--chrome-border); }
+.nb-icon.open { box-shadow: inset 0 0 0 2px var(--accent); }
 .nb-icon:disabled { opacity: .35; cursor: default; }
+.nb-tool-dot { position: absolute; right: 7px; bottom: 7px; width: 9px; height: 9px; border-radius: 50%; box-shadow: 0 0 0 1.5px var(--chrome); }
+.nb-add { color: var(--accent); }
 .nb-dot { display: block; border-radius: 50%; background: currentColor; }
-.nb-swatch { width: 26px; height: 26px; margin: 0 2px; border-radius: 50%; border: 2px solid var(--chrome); box-shadow: 0 0 0 1px var(--chrome-border); cursor: pointer; padding: 0; }
-.nb-swatch.on { box-shadow: 0 0 0 2px var(--chrome-ink); }
-.nb-menu-anchor { position: relative; }
-.nb-popover {
-  position: absolute; bottom: calc(100% + 10px); right: -8px; min-width: 130px; padding: 6px; z-index: 30;
-  background: var(--chrome); border: 1px solid var(--chrome-border); border-radius: 12px; box-shadow: 0 8px 22px rgba(60, 40, 10, .25);
-  display: flex; flex-direction: column; gap: 2px;
+.nb-options {
+  position: absolute; bottom: calc(100% - 4px); left: 50%; transform: translateX(-50%); z-index: 2; /* floats over the page: it never moves */
+  display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 10px;
+  background: var(--chrome); border: 1px solid var(--chrome-border); border-radius: 16px; box-shadow: 0 6px 18px rgba(60, 40, 10, .18);
+  animation: nb-pop .14s ease-out;
 }
-.nb-popover button { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border: 0; border-radius: 8px; background: transparent; cursor: pointer; text-align: left; }
-.nb-popover button:hover, .nb-popover button.on { background: var(--chrome-hover); }
-.nb-confirm { flex-direction: row; align-items: center; gap: 10px; white-space: nowrap; padding: 8px 10px; }
-.nb-confirm > div { display: flex; gap: 4px; }
-.nb-confirm button { padding: 6px 8px; }
-.nb-confirm button.danger { background: #e03131; color: #fff; }
+.nb-options-row { display: flex; align-items: center; gap: 4px; }
+.nb-options-row .nb-icon { width: 40px; height: 40px; }
+@keyframes nb-pop { from { opacity: 0; } }
+.nb-swatch { width: 34px; height: 34px; margin: 0 3px; border-radius: 50%; border: 3px solid var(--chrome); box-shadow: 0 0 0 1px var(--chrome-border); cursor: pointer; padding: 0; }
+.nb-swatch.on { box-shadow: 0 0 0 2.5px var(--chrome-ink); }
 
+/* Panels: notebooks (top left), more menu (top right) */
 .nb-panel {
-  position: absolute; z-index: 25; top: 56px; right: 14px; width: min(300px, calc(100% - 28px)); max-height: 60%; overflow: auto; padding: 8px;
+  position: absolute; z-index: 25; top: 56px; width: min(320px, calc(100% - 20px)); max-height: calc(100% - 140px); overflow: auto; padding: 8px;
   background: var(--chrome); border: 1px solid var(--chrome-border); border-radius: 14px; box-shadow: 0 10px 28px rgba(60, 40, 10, .28);
-  display: flex; flex-direction: column; gap: 4px;
+  display: flex; flex-direction: column; gap: 2px; animation: nb-pop .14s ease-out;
 }
+.nb-notebooks { left: max(10px, calc(50% - 460px + 14px)); }
+.nb-menu { right: max(10px, calc(50% - 460px + 14px)); }
 .nb-book { display: flex; align-items: center; gap: 4px; border-radius: 10px; }
 .nb-book.on { background: var(--chrome-on); }
 .nb-book:hover { background: var(--chrome-hover); }
@@ -777,33 +794,71 @@ kbd { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 .nb-book-cover { grid-row: 1 / 3; width: 26px; height: 36px; border-radius: 2px 4px 4px 2px; background: linear-gradient(160deg, #c9996a, #a97a4c); box-shadow: inset 0 3px 0 #d8b24a, 0 1px 3px rgba(50, 30, 10, .35); }
 .nb-book-name { font-family: "Virgil", "Segoe Print", cursive; font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nb-book-meta { font-size: 12px; color: var(--chrome-muted); }
-.nb-book.new { padding: 10px; border: 1px dashed var(--chrome-border); background: transparent; cursor: pointer; justify-content: center; color: var(--chrome-muted); }
-.nb-toast {
-  position: absolute; z-index: 40; top: 58px; left: 50%; transform: translateX(-50%); padding: 8px 14px; border-radius: 999px;
-  background: #2b2520; color: #fff; font-size: 13px; box-shadow: 0 6px 16px rgba(0, 0, 0, .25);
+.nb-book.new { margin-top: 4px; padding: 10px; border: 1px dashed var(--chrome-border); background: transparent; cursor: pointer; justify-content: center; color: var(--chrome-muted); }
+.nb-menu-section { padding: 8px 10px 2px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--chrome-muted); }
+.nb-menu-item {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 42px; padding: 8px 10px; text-align: left;
+  border: 0; border-radius: 10px; background: transparent; color: var(--chrome-ink); cursor: pointer; font-size: 14px;
 }
-@media (max-width: 720px) {
-  .nb-chip span { display: none; }
-  .nb-chip { padding: 8px 10px; }
-  .nb-chip[data-testid="nb-exit"] span { display: inline; }
-  .nb-icon { width: 36px; height: 36px; }
-  .nb-group { padding-right: 4px; }
-}
-.nb-backup { display: flex; gap: 6px; margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--chrome-border); }
-.nb-backup button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px; border: 1px solid var(--chrome-border); border-radius: 10px; background: transparent; color: var(--chrome-ink); cursor: pointer; font-size: 13px; }
-.nb-backup button:hover { background: var(--chrome-hover); }
-.nb-storage { display: flex; align-items: center; gap: 8px; margin-top: 6px; padding: 8px 6px 2px; font-size: 12px; line-height: 1.35; color: var(--chrome-muted); }
+.nb-menu-item:hover { background: var(--chrome-hover); }
+.nb-menu-item > span:first-of-type { flex: 1; }
+.nb-menu-divider { height: 1px; margin: 6px 4px; background: var(--chrome-border); }
+.nb-confirm { gap: 8px; cursor: default; background: #fff1f0; color: #8a1c1c; }
+.nb-confirm:hover { background: #fff1f0; }
+.nb-confirm button { padding: 6px 10px; border: 1px solid #e8a19b; border-radius: 8px; background: #fff; color: #8a1c1c; cursor: pointer; font-size: 13px; }
+.nb-confirm button.danger { background: #e03131; border-color: #e03131; color: #fff; }
+.nb-segmented { display: flex; gap: 4px; padding: 2px 6px 6px; }
+.nb-segmented button { flex: 1; height: 36px; border: 1px solid var(--chrome-border); border-radius: 10px; background: transparent; color: var(--chrome-ink); cursor: pointer; font-size: 13px; }
+.nb-segmented button.on { background: var(--chrome-on); border-color: var(--accent); }
+.nb-storage { display: flex; align-items: center; gap: 8px; margin-top: 2px; padding: 8px 10px 4px; font-size: 12px; line-height: 1.35; color: var(--chrome-muted); }
 .nb-storage > span:nth-child(2) { flex: 1; }
 .nb-storage-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: #f08c00; }
 .nb-storage-dot.ok { background: #2f9e44; }
 .nb-storage button { padding: 6px 10px; border: 1px solid var(--chrome-border); border-radius: 8px; background: var(--chrome); color: var(--chrome-ink); cursor: pointer; font-size: 12px; }
+
+/* Messages */
+.nb-toast {
+  position: absolute; z-index: 40; top: 62px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 24px); padding: 8px 14px; border-radius: 999px;
+  background: #2b2520; color: #fff; font-size: 13px; text-align: center; box-shadow: 0 6px 16px rgba(0, 0, 0, .25);
+}
 .nb-save-error {
-  position: absolute; z-index: 45; top: 58px; left: 50%; transform: translateX(-50%); width: min(520px, calc(100% - 24px));
+  position: absolute; z-index: 45; top: 62px; left: 50%; transform: translateX(-50%); width: min(520px, calc(100% - 24px));
   display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 12px;
   background: #fff1f0; color: #8a1c1c; border: 1px solid #f5b5b0; font-size: 13px; box-shadow: 0 8px 20px rgba(80, 20, 20, .18);
 }
 .nb-save-error span { flex: 1; }
 .nb-save-error button { padding: 6px 10px; border: 1px solid #e8a19b; border-radius: 8px; background: #fff; color: #8a1c1c; cursor: pointer; }
+
+/* Phones: the page is the screen. */
+.nb-app.compact .nb-top { padding: 6px 8px 0; gap: 6px; }
+.nb-app.compact .nb-chip { height: 38px; padding: 0 10px; border-radius: 11px; }
+.nb-app.compact .nb-chip.nb-more { width: 38px; }
+.nb-app.compact .nb-book-chip-name { font-size: 16px; }
+.nb-app.compact .nb-pager { height: 38px; }
+.nb-app.compact .nb-pager .nb-icon { width: 34px; height: 34px; }
+.nb-app.compact .nb-pager-count { min-width: 48px; font-size: 12.5px; }
+.nb-app.compact .nb-desk { padding: 4px 0 2px; }
+.nb-app.compact .nb-cover { inset: -5px -5px -9px -5px; border-radius: 6px 6px 8px 8px; box-shadow: 0 8px 18px rgba(50, 30, 10, .3), inset 0 0 0 1px rgba(80, 50, 20, .25); }
+.nb-app.compact .nb-bottom { padding: 0 6px calc(8px + env(safe-area-inset-bottom)); }
+.nb-app.compact .nb-toolbar { width: 100%; justify-content: space-between; gap: 4px; padding: 5px 6px; border-radius: 14px; }
+.nb-app.compact .nb-group { padding-right: 4px; gap: 0; }
+.nb-app.compact .nb-icon { width: 42px; height: 42px; }
+.nb-app.compact .nb-options { width: calc(100% - 12px); border-radius: 14px; bottom: calc(100% - 2px); }
+.nb-app.compact .nb-panel { top: 50px; }
+.nb-app.compact .nb-notebooks { left: 8px; }
+.nb-app.compact .nb-menu { right: 8px; }
+.nb-app.compact .nb-toast, .nb-app.compact .nb-save-error { top: 54px; }
+@media (max-width: 400px) {
+  .nb-app.compact .nb-book-chip-name { display: none; }
+  .nb-app.compact .nb-book-chip { width: 38px; padding: 0; justify-content: center; }
+  .nb-app.compact .nb-chip-caret { display: none; }
+  .nb-app.compact .nb-icon { width: 40px; height: 40px; }
+}
+@media (max-width: 340px) {
+  .nb-app.compact .nb-icon { width: 36px; height: 36px; }
+  .nb-app.compact .nb-group { padding-right: 2px; }
+  .nb-app.compact .nb-toolbar { gap: 2px; }
+}
 
 /* Offline app: shown when a new version has been downloaded in the background. */
 .app-update {
