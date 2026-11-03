@@ -691,7 +691,7 @@ kbd { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 .nb-title:hover { background: var(--chrome-hover); }
 .nb-title-input { background: var(--chrome); outline: 2px solid #6698ff; cursor: text; }
 
-.nb-desk { flex: 1; width: 100%; display: flex; align-items: center; justify-content: center; min-height: 0; padding-top: 14px; }
+.nb-desk { flex: 1; width: 100%; display: flex; align-items: center; justify-content: center; min-height: 0; padding-top: 14px; touch-action: none; overscroll-behavior: none; }
 .nb-pad { position: relative; perspective: 1700px; perspective-origin: 50% 0; }
 .nb-cover {
   position: absolute; inset: -12px -12px -22px -12px; border-radius: 8px 8px 12px 12px;
@@ -724,6 +724,9 @@ kbd { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
   animation-duration: .62s; animation-timing-function: cubic-bezier(.45, .05, .35, 1); animation-fill-mode: forwards;
 }
 .nb-flip.next { animation-name: nb-flip-up; }
+/* Swipe-driven flip: the finger sets the angle; on release it settles with a transition. */
+.nb-flip.drag { animation: none; will-change: transform; }
+.nb-flip.drag.settling { transition: transform .3s cubic-bezier(.2, .7, .3, 1), opacity .3s ease-out; }
 .nb-flip.prev { animation-name: nb-flip-down; }
 .nb-flip-face { position: absolute; inset: 0; width: 100%; height: 100%; backface-visibility: hidden; -webkit-backface-visibility: hidden; border-radius: 2px; box-shadow: 0 8px 22px rgba(40, 25, 5, .35); }
 .nb-flip-back { transform: rotateX(180deg); background: linear-gradient(0deg, #efe6d0, #f6efdd); }

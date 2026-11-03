@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   ArrowLeft, BookOpen, Check, ChevronLeft, ChevronRight, Download, Eraser, FilePlus2, Grid3X3,
   Highlighter, Pencil, Plus, Redo2, Scissors, Trash2, Type, Undo2, Upload, X,
@@ -217,7 +217,9 @@ function NotebookView({ initialState, onExit }) {
 
   // --- Painting ------------------------------------------------------------------
   const visibleElements = editor?.id ? page.elements.filter((el) => el.id !== editor.id) : page.elements;
-  useEffect(() => {
+  // Layout effect: the page is painted before the browser shows the frame, so
+  // swapping pages underneath a flip overlay never flashes the wrong page.
+  useLayoutEffect(() => {
     if (canvasRef.current) paintPage(canvasRef.current, visibleElements, { scale, pixelRatio: dpr, paper: nb.paper });
   }, [visibleElements, scale, dpr, nb.paper, fontsEpoch, flip]);
 
@@ -274,13 +276,13 @@ function NotebookView({ initialState, onExit }) {
   };
   const endFlip = () => {
     const active = flipRef.current;
-    if (!active) return;
+    if (!active || active.mode === 'drag') return;
     flipRef.current = null;
     if (active.dir === 'prev') setCurrent(active.target);
     setFlip(null);
   };
   useEffect(() => {
-    if (!flip) return undefined;
+    if (!flip || flip.mode === 'drag') return undefined;
     const timer = setTimeout(endFlip, 1200); // safety net if the animation never reports back
     return () => clearTimeout(timer);
   }, [flip]);
@@ -403,7 +405,8 @@ function NotebookView({ initialState, onExit }) {
     };
     if (!highlighting) el.pressures = [event.pressure || 0.5];
     record(page.id, page.elements);
-    drawRef.current = { type: 'stroke', pageId: page.id, base: page.elements, el, last: p };
+    drawRef.current = { type: 'stroke', pageId: page.id, base: page.elements, el, last: p, pointerType: event.pointerType };
+    if (event.pointerType === 'touch') showSwipeTip();
     setElements(page.id, [...page.elements, el]);
   };
   const onPointerMove = (event) => {
@@ -431,7 +434,203 @@ function NotebookView({ initialState, onExit }) {
     active.el = el;
     setElements(active.pageId, [...active.base, el]);
   };
-  const onPointerUp = () => { drawRef.current = null; };
+  const onPointerUp = (event) => {
+    if (event?.pointerType === 'pen') penUpAt.current = performance.now();
+    drawRef.current = null;
+  };
+
+  // --- Swipe to flip -----------------------------------------------------------------
+  // Swipe up for the next page, down for the previous one: the page lifts over the
+  // spiral under your fingers, and letting go early drops it back. One finger
+  // draws, so a flip starts with two fingers on the paper, one finger on the desk
+  // or spiral around it, or any finger once a stylus has been used (then fingers
+  // no longer draw). A stylus always writes. Wheel and trackpad scrolling flip too.
+  const pointersRef = useRef(new Map()); // pointers down on the desk -> { x, y, type }
+  const swipeRef = useRef(null);
+  const flipElRef = useRef(null);
+  const padRef = useRef(null);
+  const penUpAt = useRef(0);
+  const settleTimer = useRef(null);
+  const LAST_PAGE_TIP = 'Last page · tap ＋ to add one';
+  const FIRST_PAGE_TIP = 'This is the first page';
+
+  const showSwipeTip = () => {
+    try {
+      if (localStorage.getItem('sketchboard-nb-swipe-tip')) return;
+      localStorage.setItem('sketchboard-nb-swipe-tip', '1');
+    } catch { return; }
+    showToast('Tip: swipe up with two fingers to turn the page');
+  };
+  const applyAngle = (el, angle) => {
+    el.style.transform = `rotateX(${angle}deg)`;
+    // Past ~140° the page lies above the pad; fade it out as it settles there.
+    el.style.opacity = angle <= 140 ? '1' : String(Math.max(0, (180 - angle) / 40));
+  };
+  const angleFor = (dir, progress) => (dir === 'next' ? progress * 180 : (1 - progress) * 180);
+  const centroid = (ids) => {
+    let x = 0; let y = 0; let n = 0;
+    for (const id of ids) {
+      const p = pointersRef.current.get(id);
+      if (p) { x += p.x; y += p.y; n += 1; }
+    }
+    return n ? { x: x / n, y: y / n } : null;
+  };
+  const cancelActiveStroke = () => {
+    const active = drawRef.current;
+    if (!active) return;
+    drawRef.current = null;
+    const h = historyOf(active.pageId);
+    if (active.type === 'stroke') { h.past.pop(); setElements(active.pageId, active.base); }
+    else if (active.recorded) setElements(active.pageId, h.past.pop());
+    bump((n) => n + 1);
+  };
+  const startSwipe = (ids, event) => {
+    const c = centroid(ids);
+    swipeRef.current = { ids: new Set(ids), startX: c.x, startY: c.y, lastY: c.y, lastT: performance.now(), velocity: 0, dir: null, progress: 0, dy: 0 };
+    try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* Pointer already gone. */ }
+  };
+
+  const beginDrag = (s, dir) => {
+    commitText();
+    setPanel(null);
+    const target = dir === 'next' ? nb.current + 1 : nb.current - 1;
+    if (target < 0 || target >= nb.pages.length) { s.dir = `edge-${dir}`; return; }
+    s.dir = dir;
+    s.from = nb.current;
+    s.target = target;
+    if (reducedMotion()) return;
+    const src = snapshot(dir === 'next' ? currentPage().elements : nb.pages[target].elements);
+    flipRef.current = { dir, target, from: nb.current, mode: 'drag' };
+    if (dir === 'next') setCurrent(target);
+    setFlip({ dir, src, target, mode: 'drag' });
+  };
+
+  const finalizeDrag = () => {
+    clearTimeout(settleTimer.current);
+    const f = flipRef.current;
+    if (!f || f.mode !== 'drag' || !f.settle) return;
+    flipRef.current = null;
+    const committed = f.settle === 'commit';
+    if (f.dir === 'next' && !committed) setCurrent(f.from);
+    if (f.dir === 'prev' && committed) setCurrent(f.target);
+    setFlip(null);
+  };
+
+  const finishSwipe = (s, cancelled) => {
+    if (!s.dir || s.dir === 'none') return;
+    if (s.dir.startsWith('edge')) {
+      const pad = padRef.current;
+      if (pad) {
+        pad.style.transition = 'transform .28s cubic-bezier(.2, .8, .3, 1.2)';
+        pad.style.transform = '';
+        setTimeout(() => { if (padRef.current) padRef.current.style.transition = ''; }, 320);
+      }
+      if (Math.abs(s.dy) > 24) showToast(s.dir === 'edge-next' ? LAST_PAGE_TIP : FIRST_PAGE_TIP);
+      return;
+    }
+    // A finger that stopped before lifting has no fling.
+    const velocity = performance.now() - s.lastT > 90 ? 0 : s.velocity;
+    const fling = s.dir === 'next' ? velocity < -0.45 : velocity > 0.45;
+    const commit = !cancelled && (s.progress > 0.4 || (fling && s.progress > 0.04));
+    if (reducedMotion()) { if (commit) setCurrent(s.target); return; }
+    if (!flipRef.current || flipRef.current.mode !== 'drag') return;
+    flipRef.current = { ...flipRef.current, settle: commit ? 'commit' : 'cancel' };
+    const el = flipElRef.current;
+    if (!el) { finalizeDrag(); return; }
+    el.classList.add('settling');
+    void el.offsetWidth; // start the transition from the current angle
+    applyAngle(el, angleFor(s.dir, commit ? 1 : 0));
+    settleTimer.current = setTimeout(finalizeDrag, 450); // in case no transition runs
+  };
+
+  const onDeskPointerDownCapture = (event) => {
+    pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY, type: event.pointerType });
+    if (event.pointerType === 'pen') return; // the stylus always writes
+    if (event.target.closest?.('.nb-text-editor')) return;
+    if (flipRef.current) { event.stopPropagation(); return; } // a flip is still settling
+    const touches = [...pointersRef.current].filter(([, p]) => p.type === 'touch').map(([id]) => id);
+    const stylusBusy = drawRef.current?.pointerType === 'pen' || performance.now() - penUpAt.current < 600;
+    if (event.pointerType === 'touch' && stylusBusy) { event.stopPropagation(); return; } // resting palm
+    if (event.pointerType === 'touch' && touches.length >= 2) {
+      // Second finger: whatever the first finger started drawing was a swipe.
+      cancelActiveStroke();
+      startSwipe(touches.slice(-2), event);
+      event.stopPropagation();
+      return;
+    }
+    if (event.button > 0) return;
+    const onPaper = event.target === canvasRef.current;
+    if (!onPaper || (event.pointerType === 'touch' && penSeen.current)) {
+      startSwipe([event.pointerId], event);
+      event.stopPropagation();
+    }
+  };
+
+  const onDeskPointerMoveCapture = (event) => {
+    const tracked = pointersRef.current.get(event.pointerId);
+    if (tracked) { tracked.x = event.clientX; tracked.y = event.clientY; }
+    const s = swipeRef.current;
+    if (!s || !s.ids.has(event.pointerId)) return;
+    event.stopPropagation();
+    const c = centroid(s.ids);
+    if (!c) return;
+    const now = performance.now();
+    const dt = now - s.lastT;
+    if (dt > 0) s.velocity = 0.8 * ((c.y - s.lastY) / dt) + 0.2 * s.velocity;
+    s.lastY = c.y;
+    s.lastT = now;
+    const dy = c.y - s.startY;
+    const dx = c.x - s.startX;
+    s.dy = dy;
+    if (!s.dir) {
+      if (Math.abs(dx) > 30 && Math.abs(dx) > Math.abs(dy) * 1.5) { s.dir = 'none'; return; } // sideways: not a flip
+      if (Math.abs(dy) < 10 || Math.abs(dy) < Math.abs(dx)) return;
+      beginDrag(s, dy < 0 ? 'next' : 'prev');
+    }
+    if (s.dir === 'none') return;
+    if (s.dir.startsWith('edge')) {
+      // Nothing to turn to: the pad gives a little and springs back.
+      const pad = padRef.current;
+      if (pad) pad.style.transform = `translateY(${Math.sign(dy) * Math.min(26, Math.abs(dy) * 0.18)}px)`;
+      return;
+    }
+    s.progress = clamp((s.dir === 'next' ? -dy : dy) / (H * 0.75), 0, 1);
+    if (flipElRef.current) applyAngle(flipElRef.current, angleFor(s.dir, s.progress));
+  };
+
+  const onDeskPointerUpCapture = (event) => {
+    pointersRef.current.delete(event.pointerId);
+    const s = swipeRef.current;
+    if (!s || !s.ids.has(event.pointerId)) return;
+    event.stopPropagation();
+    swipeRef.current = null; // the first finger to lift ends a two-finger swipe
+    finishSwipe(s, event.type === 'pointercancel');
+  };
+
+  // The drag overlay mounts a frame after the swipe starts: put it at the angle
+  // the finger has reached by then (React never manages its transform).
+  useLayoutEffect(() => {
+    if (!flip || flip.mode !== 'drag' || !flipElRef.current) return;
+    applyAngle(flipElRef.current, angleFor(flip.dir, swipeRef.current?.progress || 0));
+  }, [flip]);
+
+  // Wheel / trackpad: one page per scroll gesture (inertia included).
+  const wheelRef = useRef({ acc: 0, locked: false, timer: null });
+  const onWheel = (event) => {
+    if (event.ctrlKey) return; // trackpad pinch
+    const w = wheelRef.current;
+    clearTimeout(w.timer);
+    w.timer = setTimeout(() => { w.locked = false; w.acc = 0; }, 250);
+    if (w.locked || flipRef.current || swipeRef.current) return;
+    w.acc += event.deltaMode === 1 ? event.deltaY * 16 : event.deltaMode === 2 ? event.deltaY * H : event.deltaY;
+    if (Math.abs(w.acc) < 50) return;
+    const step = w.acc > 0 ? 1 : -1;
+    w.locked = true;
+    w.acc = 0;
+    const target = nb.current + step;
+    if (target < 0 || target >= nb.pages.length) { showToast(step > 0 ? LAST_PAGE_TIP : FIRST_PAGE_TIP); return; }
+    goTo(target);
+  };
 
   // --- Keyboard --------------------------------------------------------------------
   const keyHandler = useRef(null);
@@ -511,8 +710,17 @@ function NotebookView({ initialState, onExit }) {
         </div>
       )}
 
-      <main className="nb-desk">
-        <div className="nb-pad" style={{ width: W, height: H }}>
+      <main
+        className="nb-desk"
+        data-testid="nb-desk"
+        onPointerDownCapture={onDeskPointerDownCapture}
+        onPointerMoveCapture={onDeskPointerMoveCapture}
+        onPointerUpCapture={onDeskPointerUpCapture}
+        onPointerCancelCapture={onDeskPointerUpCapture}
+        onWheel={onWheel}
+      >
+        {/* Perspective scales with the page: a fixed depth makes a large page balloon as it lifts. */}
+        <div className="nb-pad" ref={padRef} style={{ width: W, height: H, perspective: `${Math.round(H * 4)}px` }}>
           <div className="nb-cover" aria-hidden="true" />
           <div className="nb-stage" style={{ width: W, height: H }}>
             <canvas
@@ -550,7 +758,13 @@ function NotebookView({ initialState, onExit }) {
               />
             )}
             {flip && (
-              <div className={`nb-flip ${flip.dir}`} data-testid="nb-flip" onAnimationEnd={endFlip}>
+              <div
+                ref={flipElRef}
+                className={`nb-flip ${flip.mode === 'drag' ? 'drag' : flip.dir}`}
+                data-testid="nb-flip"
+                onAnimationEnd={endFlip}
+                onTransitionEnd={(event) => { if (event.propertyName === 'transform') finalizeDrag(); }}
+              >
                 <img className="nb-flip-face" src={flip.src} alt="" draggable={false} />
                 <div className="nb-flip-face nb-flip-back" />
               </div>
