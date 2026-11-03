@@ -15,7 +15,8 @@ const clearHash = () => history.replaceState(null, '', window.location.pathname 
 // app's shortcuts) open one directly.
 function Root() {
   const [mode, setMode] = useState(() => {
-    if (window.__sharedScene) return 'board';
+    // Shared boards and live-session invites are whiteboard links.
+    if (window.__sharedScene || new URLSearchParams(window.location.search).has('live')) return 'board';
     if (window.location.hash === '#notebook') return 'notebook';
     if (window.location.hash === '#board') { clearHash(); return 'board'; }
     return loadMode();

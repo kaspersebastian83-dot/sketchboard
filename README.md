@@ -14,7 +14,7 @@ A hand-drawn whiteboard in the browser — an Excalidraw-style infinite canvas w
 - **Boards** — multiple boards with search and per-board camera, theme, and zen preference
 - **Movable UI** — drag any floating bar by its grip; zen mode (`Z`) hides all chrome
 - **Live collaboration** — same-network rooms with presence, named cursors, and an explicit follow-the-presenter toggle (requires the dev server)
-- **Pocket notebook** — an A6 top-spiral pad with grid/dot/lined/blank paper, pen, highlighter, text and eraser, page flipping, and multiple notebooks, and JSON backup/restore (menu → Pocket notebook, or open `#notebook`)
+- **Pocket notebook** — an A6 top-spiral pad with grid/dot/lined/blank paper, pen, highlighter, text and eraser, page flipping, and multiple notebooks, and JSON backup/restore. It's the app's main view: a fresh install opens straight into it, the whiteboard's **Notebook** button opens it, and the last view you used is remembered
 - **Export** — PNG, SVG, or a standalone HTML snapshot
 - **Themes** — light and dark
 
@@ -54,6 +54,7 @@ npm test               # full smoke suite (starts its own dev server)
 npm run test:standalone
 node tests/notebook.mjs   # notebook mode, against the standalone build
 node tests/pwa.mjs        # installable app: offline launch and update prompt (docs/)
+node tests/layout.mjs     # top bar never overlaps, 320–1920px
 ```
 
 ## Stack

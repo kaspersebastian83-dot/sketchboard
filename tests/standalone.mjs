@@ -5,6 +5,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const browser = await chromium.launch({ headless: true });
+// A fresh profile opens the notebook; these tests are about the whiteboard, so
+// start every new browser profile there (a remembered choice is left alone).
+const boardFirst = () => { try { if (!localStorage.getItem('sketchboard-mode-v1')) localStorage.setItem('sketchboard-mode-v1', 'board'); } catch {} };
+const rawNewContext = browser.newContext.bind(browser);
+browser.newContext = async (options) => { const context = await rawNewContext(options); await context.addInitScript(boardFirst); return context; };
+browser.newPage = async (options) => { const context = await browser.newContext(options); const page = await context.newPage(); page.on('close', () => context.close().catch(() => {})); return page; };
+
 try {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, offline: true });
   const page = await context.newPage();

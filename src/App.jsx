@@ -2233,6 +2233,12 @@ export default function App({ onOpenNotebook }) {
         )}
         {!sharedView && (
           <>
+            {onOpenNotebook && (
+              <button className="island boards-button notebook-button" aria-label="Notebook" title="Pocket notebook" data-testid="open-notebook-bar" onClick={() => { setMenuOpen(false); setBoardsOpen(false); setFramesOpen(false); onOpenNotebook(); }}>
+                <BookOpen size={17} />
+                <span>Notebook</span>
+              </button>
+            )}
             <button className={`island boards-button ${boardsOpen ? 'pressed' : ''}`} aria-label="Boards" aria-expanded={boardsOpen} onClick={() => { setBoardsOpen(!boardsOpen); setMenuOpen(false); setFramesOpen(false); }}>
               <LayoutGrid size={17} />
               <span>Boards</span>
@@ -2341,7 +2347,7 @@ export default function App({ onOpenNotebook }) {
         <button className={`island labeled-button library-button ${libraryOpen ? 'pressed' : ''}`} onClick={() => setLibraryOpen(!libraryOpen)} aria-label="Library" aria-expanded={libraryOpen}><Library size={17} /><span>Library</span></button>
         <button className="share-button" onClick={() => { setShareUrl(''); setModal('share'); }} aria-label="Share"><Share2 size={16} /><span>Share</span></button>
         {!sharedView && <button className="island labeled-button present-button" onClick={() => stepPresentation(1)} aria-label="Present" title="Walk through your frames"><Play size={15} /><span>Present</span></button>}
-        <button className="island labeled-button" onClick={() => setModal('export')} aria-label="Export"><Download size={16} /><span>Export</span></button>
+        <button className="island labeled-button export-button" onClick={() => setModal('export')} aria-label="Export"><Download size={16} /><span>Export</span></button>
         {islandGrip('top-right', 'Drag action bar to move')}
       </div>
 

@@ -1,6 +1,8 @@
 import { chromium, expect } from '@playwright/test';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createServer } from 'node:http';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 
 // Runs in the page: { activeId, notebooks } from IndexedDB, in notebook order.
 export const readStore = () => new Promise((resolve) => {
@@ -25,34 +27,54 @@ const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolv
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const shots = process.env.NOTEBOOK_SHOTS || '';
 if (isMain) {
+// Served over http like the real (GitHub Pages / installed) app. Chromium can
+// read stale localStorage when a file:// page reloads instantly, which made
+// remembered-view checks flaky; the double-click file has its own test.
+const html = await readFile(path.join(root, 'sketchboard.html'));
+const server = createServer((req, res) => res.writeHead(200, { 'content-type': 'text/html' }).end(html));
+await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+const appUrl = `http://127.0.0.1:${server.address().port}/`;
 const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
 try {
-  const context = await browser.newContext({ viewport: { width: 420, height: 860 }, offline: true });
+  const context = await browser.newContext({ viewport: { width: 420, height: 860 } });
+  // Migration: a notebook saved by the older localStorage version moves into
+  // IndexedDB on first open, and the old key is freed for the whiteboard.
+  // (Seeded before the app's own scripts run, on the first load only.)
+  await context.addInitScript(() => {
+    if (localStorage.getItem('test-legacy-seeded')) return;
+    localStorage.setItem('test-legacy-seeded', '1');
+    localStorage.setItem('sketchboard-notebooks-v1', JSON.stringify({
+      version: 1, activeId: 'nb-old', notebooks: [{ id: 'nb-old', name: 'Old pad', paper: 'lines', current: 0, pages: [{ id: 'p-old', elements: [] }] }],
+    }));
+  });
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
-  await page.goto(pathToFileURL(path.join(root, 'sketchboard.html')).href);
-  await expect(page.getByText('A quiet canvas for loud ideas.')).toBeVisible();
+  await page.goto(appUrl);
 
-  // Migration: a notebook saved by the older localStorage version moves into
-  // IndexedDB on first open, and the old key is freed for the whiteboard.
-  await page.evaluate(() => localStorage.setItem('sketchboard-notebooks-v1', JSON.stringify({
-    version: 1, activeId: 'nb-old', notebooks: [{ id: 'nb-old', name: 'Old pad', paper: 'lines', current: 0, pages: [{ id: 'p-old', elements: [] }] }],
-  })));
-  await page.getByLabel('Main menu').click();
-  await page.getByTestId('open-notebook').click();
+  // A fresh install opens straight into the notebook — it's the main use.
+  await expect(page.getByTestId('notebook')).toBeVisible();
   await expect(page.getByTestId('nb-title')).toHaveText('Old pad');
   expect((await page.evaluate(readStore)).notebooks[0].name).toBe('Old pad');
   expect(await page.evaluate(() => localStorage.getItem('sketchboard-notebooks-v1'))).toBe(null);
-  // Start the real run from an empty store.
+
+  // Start the real run from an empty store. Leaving for the whiteboard is
+  // remembered, so the reload lands on the board.
   await page.getByTestId('nb-exit').click();
-  await page.evaluate(() => new Promise((resolve) => { const r = indexedDB.deleteDatabase('sketchboard'); r.onsuccess = r.onerror = r.onblocked = resolve; }));
+  await expect(page.getByTestId('open-notebook-bar')).toBeVisible();
+  // Wipe only from a fresh board page: the notebook's last save on exit could
+  // otherwise land after the wipe and recreate the old data.
+  await page.reload();
+  await expect(page.getByTestId('open-notebook-bar')).toBeVisible();
+  expect(await page.evaluate(() => new Promise((resolve) => { const r = indexedDB.deleteDatabase('sketchboard'); r.onsuccess = () => resolve('deleted'); r.onerror = r.onblocked = () => resolve('not deleted'); }))).toBe('deleted');
   await page.reload();
   await expect(page.getByText('A quiet canvas for loud ideas.')).toBeVisible();
 
-  // Open the notebook from the main menu.
+  // The menu still has an entry, but the top bar's Notebook button is the main door.
   await page.getByLabel('Main menu').click();
-  await page.getByTestId('open-notebook').click();
+  await expect(page.getByTestId('open-notebook')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.getByTestId('open-notebook-bar').click();
   await expect(page.getByTestId('notebook')).toBeVisible();
   await expect(page.getByTestId('nb-page-count')).toHaveText('1 / 1');
 
@@ -167,13 +189,22 @@ try {
   expect((await read()).notebooks.length).toBe(3);
   await page.keyboard.press('Escape');
 
-  // Back to the whiteboard.
+  // Back to the whiteboard; the choice sticks across reloads.
   await page.getByTestId('nb-exit').click();
   await expect(page.getByTestId('tool-rectangle')).toBeVisible();
+  await page.reload();
+  await expect(page.getByTestId('tool-rectangle')).toBeVisible();
+
+  // Live-session invites always open the whiteboard, even for a notebook user.
+  await page.getByTestId('open-notebook-bar').click();
+  await expect(page.getByTestId('notebook')).toBeVisible();
+  await page.goto(`${appUrl}?live=abc`);
+  await expect(page.getByTestId('notebook')).toHaveCount(0);
 
   expect(errors).toEqual([]);
   console.log('notebook tests passed');
 } finally {
   await browser.close();
+  server.close();
 }
 }

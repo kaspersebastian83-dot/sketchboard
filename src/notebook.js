@@ -45,8 +45,10 @@ export function saveNotebooks(state) {
   return writeNotebooks(state);
 }
 
+// The notebook is the main use, so it is what a fresh install opens to;
+// after that, whichever view was used last is remembered.
 export function loadMode() {
-  try { return localStorage.getItem(MODE_KEY) === 'notebook' ? 'notebook' : 'board'; } catch { return 'board'; }
+  try { return localStorage.getItem(MODE_KEY) === 'board' ? 'board' : 'notebook'; } catch { return 'notebook'; }
 }
 
 export function saveMode(mode) {

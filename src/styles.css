@@ -111,9 +111,13 @@ button { -webkit-tap-highlight-color: transparent; }
 
 /* Narrow windows: the three top bars can't all keep their text labels
    without colliding, so the action bar collapses to icon-only buttons. */
-@media (max-width: 1340px) {
+/* Below ~1480px the centered toolbar needs the room, so the top-bar buttons go icon-only. */
+@media (max-width: 1479px) {
   .top-right button span { display: none; }
   .top-right .labeled-button, .top-right .share-button { width: 42px; padding: 0; justify-content: center; gap: 0; }
+  /* Same for the left group, so Notebook / Boards / Frames never run into the toolbar. */
+  .top-left .boards-button span { display: none; }
+  .top-left .boards-button { width: 42px; padding: 0; justify-content: center; gap: 0; }
 }
 .lock-button { width: 34px; flex-basis: 34px; }
 .more-tools { display: none; }
@@ -343,6 +347,11 @@ kbd { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 }
 .boards-button:hover { background: var(--hover); }
 .boards-button.pressed { background: var(--active); color: var(--primary); }
+/* The notebook is the app's main view, so its door is warm and easy to spot. */
+.notebook-button { background: #f6ecd8; border-color: #e2cfa8; color: #6b4a1f; }
+.notebook-button:hover { background: #efe0c2; }
+.dark .notebook-button { background: #3d3427; border-color: #5a4b35; color: #f1dfbd; }
+.dark .notebook-button:hover { background: #4a3f2f; }
 .boards-panel { position: absolute; top: 52px; left: 0; width: 264px; padding: 8px; z-index: 21; }
 .board-search-row { display: flex; gap: 6px; margin-bottom: 7px; }
 .board-search {
@@ -583,7 +592,8 @@ kbd { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
   .lock-button { width: 31px; flex-basis: 31px; }
   .hint-tools { left: calc(50% + 140px); }
 }
-@media (max-width: 900px) {
+/* Below ~980px the top bar's buttons need the whole first row, so the toolbar drops to a second row. */
+@media (max-width: 979px) {
   .toolbar { top: 72px; max-width: calc(100vw - 32px); overflow-x: auto; scrollbar-width: none; }
   .toolbar::-webkit-scrollbar { display: none; }
   .properties { top: 136px; }
@@ -595,7 +605,10 @@ kbd { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
   .top-left { left: 10px; }.top-right { right: 10px; gap: 7px; }
   .icon-button, .labeled-button, .share-button { height: 40px; }
   .boards-button { height: 40px; padding: 0 11px; }
+  .top-left .boards-button { width: 40px; padding: 0; }
   .boards-button span { display: none; }
+  /* Phones: the Notebook button takes the top-right Export slot; export stays in the main menu. */
+  .top-right .export-button { display: none; }
   .boards-panel { top: 50px; width: min(264px, calc(100vw - 20px)); }
   .frames-panel { left: 56px; width: min(248px, calc(100vw - 76px)); }
   .library-button { width: 40px; padding: 0; justify-content: center; }
@@ -628,6 +641,15 @@ kbd { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
   .top-right .labeled-button:not(.library-button) { width: 40px; padding: 0; justify-content: center; }
   .top-right .labeled-button:not(.library-button) span { display: none; }
   .history-controls { display: none; }
+}
+
+/* Narrowest phones (360px Android, 320px): tighten the top bar so both groups fit on one row. */
+@media (max-width: 389px) {
+  .top-left { left: 6px; gap: 5px; }
+  .top-right { right: 6px; gap: 5px; }
+  .top-left .icon-button, .top-left .boards-button,
+  .top-right .labeled-button, .top-right .share-button, .top-right .icon-button { width: 36px; height: 38px; padding: 0; }
+  .top-left > .island-grip, .top-right > .island-grip { display: none; }
 }
 
 /* --- Notebook mode: an A6 top-spiral pocket pad ------------------------------- */

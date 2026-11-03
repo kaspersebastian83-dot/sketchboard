@@ -6,7 +6,7 @@
 // file changes, the browser installs the new worker in the background, and the
 // page offers a reload — it never swaps the app out from under you mid-note.
 
-const VERSION = '3bd4af5e5b83';
+const VERSION = '88add1d903b7';
 const CACHE = `sketchboard-${VERSION}`;
 const PRECACHE = [
   './',

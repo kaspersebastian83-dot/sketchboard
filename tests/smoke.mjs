@@ -38,6 +38,13 @@ async function drag(page, x1, y1, x2, y2) {
 try {
   await waitForServer();
   browser = await chromium.launch({ headless: true });
+  // A fresh profile opens the notebook; these tests are about the whiteboard, so
+  // start every new browser profile there (a remembered choice is left alone).
+  const boardFirst = () => { try { if (!localStorage.getItem('sketchboard-mode-v1')) localStorage.setItem('sketchboard-mode-v1', 'board'); } catch {} };
+  const rawNewContext = browser.newContext.bind(browser);
+  browser.newContext = async (options) => { const context = await rawNewContext(options); await context.addInitScript(boardFirst); return context; };
+  browser.newPage = async (options) => { const context = await browser.newContext(options); const page = await context.newPage(); page.on('close', () => context.close().catch(() => {})); return page; };
+
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
