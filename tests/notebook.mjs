@@ -2,8 +2,29 @@ import { chromium, expect } from '@playwright/test';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+// Runs in the page: { activeId, notebooks } from IndexedDB, in notebook order.
+export const readStore = () => new Promise((resolve) => {
+  const open = indexedDB.open('sketchboard');
+  open.onerror = () => resolve(null);
+  open.onupgradeneeded = () => { open.transaction.abort(); resolve(null); };
+  open.onsuccess = () => {
+    const db = open.result;
+    if (!db.objectStoreNames.contains('notebooks')) { db.close(); resolve(null); return; }
+    const tx = db.transaction(['notebooks', 'meta']);
+    const all = tx.objectStore('notebooks').getAll();
+    const active = tx.objectStore('meta').get('activeId');
+    tx.oncomplete = () => {
+      db.close();
+      const notebooks = all.result.sort((a, b) => a.order - b.order);
+      resolve(notebooks.length ? { activeId: active.result, notebooks } : null);
+    };
+  };
+});
+
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const shots = process.env.NOTEBOOK_SHOTS || '';
+if (isMain) {
 const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
 try {
   const context = await browser.newContext({ viewport: { width: 420, height: 860 }, offline: true });
@@ -13,14 +34,32 @@ try {
   await page.goto(pathToFileURL(path.join(root, 'sketchboard.html')).href);
   await expect(page.getByText('A quiet canvas for loud ideas.')).toBeVisible();
 
+  // Migration: a notebook saved by the older localStorage version moves into
+  // IndexedDB on first open, and the old key is freed for the whiteboard.
+  await page.evaluate(() => localStorage.setItem('sketchboard-notebooks-v1', JSON.stringify({
+    version: 1, activeId: 'nb-old', notebooks: [{ id: 'nb-old', name: 'Old pad', paper: 'lines', current: 0, pages: [{ id: 'p-old', elements: [] }] }],
+  })));
+  await page.getByLabel('Main menu').click();
+  await page.getByTestId('open-notebook').click();
+  await expect(page.getByTestId('nb-title')).toHaveText('Old pad');
+  expect((await page.evaluate(readStore)).notebooks[0].name).toBe('Old pad');
+  expect(await page.evaluate(() => localStorage.getItem('sketchboard-notebooks-v1'))).toBe(null);
+  // Start the real run from an empty store.
+  await page.getByTestId('nb-exit').click();
+  await page.evaluate(() => new Promise((resolve) => { const r = indexedDB.deleteDatabase('sketchboard'); r.onsuccess = r.onerror = r.onblocked = resolve; }));
+  await page.reload();
+  await expect(page.getByText('A quiet canvas for loud ideas.')).toBeVisible();
+
   // Open the notebook from the main menu.
   await page.getByLabel('Main menu').click();
   await page.getByTestId('open-notebook').click();
   await expect(page.getByTestId('notebook')).toBeVisible();
   await expect(page.getByTestId('nb-page-count')).toHaveText('1 / 1');
 
-  // Saves are debounced, so an empty read just means "not written yet".
-  const read = async () => (await page.evaluate(() => JSON.parse(localStorage.getItem('sketchboard-notebooks-v1')))) || { notebooks: [{ name: '', paper: '', pages: [{ elements: [] }] }, { name: '' }] };
+  // Reads what is actually on disk (IndexedDB). Saves are debounced, so an
+  // empty store just means "not written yet".
+  const EMPTY = { notebooks: [{ name: '', paper: '', pages: [{ elements: [] }] }, { name: '' }] };
+  const read = async () => (await page.evaluate(readStore)) || EMPTY;
   const canvas = page.getByTestId('nb-canvas');
   const box = await canvas.boundingBox();
   expect(Math.abs(box.height / box.width - 592 / 420)).toBeLessThan(0.02); // A6 proportions
@@ -107,6 +146,7 @@ try {
 
   // Backup: download everything, then restore an edited copy of one notebook.
   await page.getByTestId('nb-notebooks').click();
+  await expect(page.getByTestId('nb-storage')).toContainText('Saved on this device');
   const [download] = await Promise.all([page.waitForEvent('download'), page.getByTestId('nb-backup').click()]);
   const backup = JSON.parse(await (await import('node:fs/promises')).readFile(await download.path(), 'utf8'));
   expect(backup.app).toBe('sketchboard-notebooks');
@@ -135,4 +175,5 @@ try {
   console.log('notebook tests passed');
 } finally {
   await browser.close();
+}
 }

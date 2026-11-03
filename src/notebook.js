@@ -3,6 +3,7 @@
 // existing drawing engine renders the ink and this module only adds the paper.
 
 import { uid, drawScene } from './engine.js';
+import { readNotebooks, writeNotebooks } from './notebookStore.js';
 
 export const PAGE_W = 420; // A6 portrait: 105 x 148 mm at 4 units per mm
 export const PAGE_H = 592;
@@ -14,7 +15,6 @@ export const PAPERS = [
   { id: 'blank', label: 'Blank' },
 ];
 
-const KEY = 'sketchboard-notebooks-v1';
 const MODE_KEY = 'sketchboard-mode-v1';
 
 export const newPage = () => ({ id: uid(), elements: [] });
@@ -23,21 +23,26 @@ export function newNotebook(name = 'Pocket notes', paper = 'grid') {
   return { id: `nb-${uid()}`, name, paper, pages: [newPage()], current: 0, createdAt: Date.now(), updatedAt: Date.now() };
 }
 
-export function loadNotebooks() {
-  try {
-    const raw = JSON.parse(localStorage.getItem(KEY));
-    if (raw?.version === 1 && Array.isArray(raw.notebooks) && raw.notebooks.length
-      && raw.notebooks.every((n) => n.id && Array.isArray(n.pages) && n.pages.length && n.pages.every((p) => p.id && Array.isArray(p.elements)))) {
-      const activeId = raw.notebooks.some((n) => n.id === raw.activeId) ? raw.activeId : raw.notebooks[0].id;
-      return { version: 1, activeId, notebooks: raw.notebooks.map((n) => ({ ...n, current: Math.min(Math.max(0, n.current || 0), n.pages.length - 1) })) };
-    }
-  } catch { /* Fall through to a fresh notebook. */ }
-  const first = newNotebook();
-  return { version: 1, activeId: first.id, notebooks: [first] };
+const validNotebook = (n) => n && n.id && Array.isArray(n.pages) && n.pages.length && n.pages.every((p) => p && p.id && Array.isArray(p.elements));
+
+// Validates whatever storage returned; anything unusable starts a fresh pad.
+export function normalizeNotebooks(raw) {
+  const notebooks = Array.isArray(raw?.notebooks) ? raw.notebooks.filter(validNotebook) : [];
+  if (!notebooks.length) {
+    const first = newNotebook();
+    return { version: 1, activeId: first.id, notebooks: [first] };
+  }
+  const activeId = notebooks.some((n) => n.id === raw.activeId) ? raw.activeId : notebooks[0].id;
+  return { version: 1, activeId, notebooks: notebooks.map((n) => ({ ...n, current: Math.min(Math.max(0, n.current || 0), n.pages.length - 1) })) };
 }
 
+export async function loadNotebooks() {
+  return normalizeNotebooks(await readNotebooks());
+}
+
+// Resolves when the save is on disk; rejects if the browser refused it.
 export function saveNotebooks(state) {
-  try { localStorage.setItem(KEY, JSON.stringify(state)); } catch { /* Storage can be full or disabled. */ }
+  return writeNotebooks(state);
 }
 
 export function loadMode() {

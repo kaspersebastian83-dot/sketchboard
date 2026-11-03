@@ -8,6 +8,7 @@ import {
   PAGE_W, PAGE_H, GRID, PAPERS, loadNotebooks, saveNotebooks, newNotebook, newPage, paintPage, pageToDataUrl,
   serializeBackup, parseBackup, mergeNotebooks,
 } from './notebook.js';
+import { requestPersistence, storageInfo } from './notebookStore.js';
 
 const INKS = [
   { color: '#1e1e1e', label: 'Black' },
@@ -63,8 +64,23 @@ function Spiral({ scale, width }) {
   );
 }
 
+// Storage is asynchronous (IndexedDB), so the pad appears once it has loaded.
 export default function Notebook({ onExit }) {
-  const [state, setState] = useState(loadNotebooks);
+  const [initial, setInitial] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    loadNotebooks().then((loaded) => alive && setInitial(loaded));
+    return () => { alive = false; };
+  }, []);
+  if (!initial) return <div className="nb-app" data-testid="notebook-loading" />;
+  return <NotebookView initialState={initial} onExit={onExit} />;
+}
+
+const formatBytes = (bytes) => (bytes == null ? '' : bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`);
+const isInstalled = () => window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone === true;
+
+function NotebookView({ initialState, onExit }) {
+  const [state, setState] = useState(initialState);
   const stateRef = useRef(state);
   stateRef.current = state;
   const nb = state.notebooks.find((n) => n.id === state.activeId);
@@ -113,15 +129,42 @@ export default function Notebook({ onExit }) {
   }, []);
 
   // --- Persistence -------------------------------------------------------------
+  // A failed save is never silent: a banner stays up until a save succeeds.
+  const [saveError, setSaveError] = useState(null);
+  const [storage, setStorage] = useState(null);
+  const persist = useCallback((next) => saveNotebooks(next).then(
+    () => setSaveError(null),
+    (error) => setSaveError(error?.name === 'QuotaExceededError' ? 'This device is out of storage space.' : 'Your latest changes could not be saved.'),
+  ), []);
+  const firstRender = useRef(true);
   useEffect(() => {
-    const timer = setTimeout(() => saveNotebooks(state), 250);
+    if (firstRender.current) { firstRender.current = false; return undefined; }
+    const timer = setTimeout(() => persist(state), 250);
     return () => clearTimeout(timer);
-  }, [state]);
+  }, [state, persist]);
   useEffect(() => {
-    const flush = () => saveNotebooks(stateRef.current);
+    const flush = () => persist(stateRef.current);
+    const onVisibility = () => { if (document.visibilityState === 'hidden') flush(); };
     window.addEventListener('pagehide', flush);
-    return () => { window.removeEventListener('pagehide', flush); flush(); };
-  }, []);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      document.removeEventListener('visibilitychange', onVisibility);
+      flush();
+    };
+  }, [persist]);
+  const refreshStorage = useCallback(() => { storageInfo().then(setStorage); }, []);
+  useEffect(() => {
+    // Installed apps are usually granted persistent storage silently; in a plain
+    // tab the panel offers a button instead, since Firefox asks the user.
+    if (isInstalled()) requestPersistence().finally(refreshStorage);
+    else refreshStorage();
+  }, [refreshStorage]);
+  const protectStorage = async () => {
+    const granted = await requestPersistence();
+    refreshStorage();
+    showToast(granted ? 'Notebooks are protected from cleanup' : 'The browser declined. Installing the app usually helps.');
+  };
 
   const patchNotebook = useCallback((id, fn) => {
     setState((s) => ({ ...s, notebooks: s.notebooks.map((n) => (n.id === id ? { ...fn(n), updatedAt: Date.now() } : n)) }));
@@ -430,7 +473,7 @@ export default function Notebook({ onExit }) {
         ) : (
           <button className="nb-title" onClick={() => setRenaming(true)} title="Rename notebook" data-testid="nb-title">{nb.name}</button>
         )}
-        <button className={`nb-chip ${panel === 'notebooks' ? 'on' : ''}`} onClick={() => setPanel(panel === 'notebooks' ? null : 'notebooks')} data-testid="nb-notebooks"><BookOpen size={16} /><span>Notebooks</span></button>
+        <button className={`nb-chip ${panel === 'notebooks' ? 'on' : ''}`} onClick={() => { if (panel !== 'notebooks') refreshStorage(); setPanel(panel === 'notebooks' ? null : 'notebooks'); }} data-testid="nb-notebooks"><BookOpen size={16} /><span>Notebooks</span></button>
       </header>
 
       {panel === 'notebooks' && (
@@ -453,6 +496,18 @@ export default function Notebook({ onExit }) {
             <button onClick={() => backupInput.current?.click()} data-testid="nb-restore"><Upload size={15} /><span>Restore…</span></button>
             <input ref={backupInput} type="file" accept="application/json,.json" hidden data-testid="nb-restore-input" onChange={(event) => { restoreFrom(event.target.files?.[0]); event.target.value = ''; }} />
           </div>
+          {storage && (
+            <div className="nb-storage" data-testid="nb-storage">
+              <span className={`nb-storage-dot ${storage.persisted ? 'ok' : ''}`} />
+              <span>
+                {storage.backend === 'localstorage' ? 'Saved in basic browser storage' : 'Saved on this device'}
+                {storage.usage != null && ` · ${formatBytes(storage.usage)}`}
+                <br />
+                {storage.persisted ? 'Protected from automatic cleanup' : 'Not protected from cleanup yet'}
+              </span>
+              {!storage.persisted && <button onClick={protectStorage} data-testid="nb-protect">Protect</button>}
+            </div>
+          )}
         </div>
       )}
 
@@ -507,6 +562,13 @@ export default function Notebook({ onExit }) {
       </main>
 
       {toast && <div className="nb-toast" role="status">{toast}</div>}
+      {saveError && (
+        <div className="nb-save-error" role="alert" data-testid="nb-save-error">
+          <span>{saveError} Back up now so nothing is lost.</span>
+          <button onClick={backupAll}>Back up</button>
+          <button onClick={() => persist(stateRef.current)}>Retry</button>
+        </div>
+      )}
 
       <footer className="nb-toolbar" data-testid="nb-toolbar">
         <div className="nb-group">

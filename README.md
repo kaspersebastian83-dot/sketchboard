@@ -26,6 +26,12 @@ Share → **Live session** starts a room on your network; guests join the link a
 - **Named cursors** — remote pointers carry a small name tag under the arrow. It stays visible while the owner moves and fades after ~2 s of stillness, so quiet corners of the board don't collect labels.
 - **Follow the presenter** — guests choose to follow with an explicit toggle (never automatic): while it's on, the presenter's camera — including presentation frame advances — stays in sync; toggling it off lets a guest explore freely without being yanked back. Panning and zooming never change the toggle. The presenter sees a subtle "N guests following" count in the presentation bar while the show runs.
 
+## Install as an app
+
+The GitHub Pages build (`docs/`) is an installable web app: open it in the browser, then **Add to Home Screen** (iPhone/iPad: Share → Add to Home Screen; Android/Chrome/Edge: Install app). It opens full-screen with its own icon and works with no network — a service worker keeps the whole app cached and offers a reload when a new version has been deployed. Notebook pages live in IndexedDB on the device; the Notebooks panel shows how much is stored and whether the browser has marked it as protected from automatic cleanup.
+
+Rebuild the icon set after changing `src/assets/notebook-icon.svg` with `node scripts/build-icons.mjs`.
+
 ## Run it
 
 ```bash
@@ -47,6 +53,7 @@ npm run build:standalone
 npm test               # full smoke suite (starts its own dev server)
 npm run test:standalone
 node tests/notebook.mjs   # notebook mode, against the standalone build
+node tests/pwa.mjs        # installable app: offline launch and update prompt (docs/)
 ```
 
 ## Stack

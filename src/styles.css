@@ -767,3 +767,23 @@ kbd { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 .nb-backup { display: flex; gap: 6px; margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--chrome-border); }
 .nb-backup button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px; border: 1px solid var(--chrome-border); border-radius: 10px; background: transparent; color: var(--chrome-ink); cursor: pointer; font-size: 13px; }
 .nb-backup button:hover { background: var(--chrome-hover); }
+.nb-storage { display: flex; align-items: center; gap: 8px; margin-top: 6px; padding: 8px 6px 2px; font-size: 12px; line-height: 1.35; color: var(--chrome-muted); }
+.nb-storage > span:nth-child(2) { flex: 1; }
+.nb-storage-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: #f08c00; }
+.nb-storage-dot.ok { background: #2f9e44; }
+.nb-storage button { padding: 6px 10px; border: 1px solid var(--chrome-border); border-radius: 8px; background: var(--chrome); color: var(--chrome-ink); cursor: pointer; font-size: 12px; }
+.nb-save-error {
+  position: absolute; z-index: 45; top: 58px; left: 50%; transform: translateX(-50%); width: min(520px, calc(100% - 24px));
+  display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 12px;
+  background: #fff1f0; color: #8a1c1c; border: 1px solid #f5b5b0; font-size: 13px; box-shadow: 0 8px 20px rgba(80, 20, 20, .18);
+}
+.nb-save-error span { flex: 1; }
+.nb-save-error button { padding: 6px 10px; border: 1px solid #e8a19b; border-radius: 8px; background: #fff; color: #8a1c1c; cursor: pointer; }
+
+/* Offline app: shown when a new version has been downloaded in the background. */
+.app-update {
+  position: fixed; z-index: 1000; left: 50%; bottom: calc(86px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+  display: flex; align-items: center; gap: 12px; padding: 8px 8px 8px 16px; border-radius: 999px;
+  background: #2b2520; color: #fff; font-size: 13px; box-shadow: 0 8px 22px rgba(0, 0, 0, .28); white-space: nowrap;
+}
+.app-update button { padding: 6px 12px; border: 0; border-radius: 999px; background: #f6dc8a; color: #2b2520; font-weight: 600; cursor: pointer; }
