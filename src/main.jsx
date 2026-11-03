@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import App from './App.jsx';
 import Notebook from './Notebook.jsx';
 import { loadMode, saveMode } from './notebook.js';
+import notebookIcon from './assets/notebook-icon.svg?raw';
 import { decodeShareHash } from './share.js';
 import './styles.css';
 
@@ -16,6 +17,11 @@ function Root() {
   useEffect(() => { if (!window.__sharedScene) saveMode(mode); }, [mode]);
   useEffect(() => {
     document.title = mode === 'notebook' ? 'Sketchboard — Notebook' : 'Sketchboard — Hand-drawn whiteboard';
+    // The notebook carries its own app icon; the whiteboard keeps the one from index.html.
+    const link = document.querySelector('link[rel="icon"]');
+    if (!link) return;
+    if (!link.dataset.boardHref) link.dataset.boardHref = link.getAttribute('href');
+    link.setAttribute('href', mode === 'notebook' ? `data:image/svg+xml,${encodeURIComponent(notebookIcon)}` : link.dataset.boardHref);
   }, [mode]);
   return mode === 'notebook'
     ? <Notebook onExit={() => { if (window.location.hash === '#notebook') history.replaceState(null, '', window.location.pathname + window.location.search); setMode('board'); }} />
